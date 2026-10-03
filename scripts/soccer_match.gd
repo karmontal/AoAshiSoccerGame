@@ -1,5 +1,5 @@
 class_name SoccerMatch
-extends Node2D
+extends Node3D
 ## Builds the match scene in code and runs everything: kickoff/goal flow,
 ## the human-controlled player, team AI, passing, shooting and possession.
 
@@ -32,7 +32,7 @@ var ball: Ball
 var vision: FieldVision
 var hud: Hud
 var controls: TouchControls
-var camera: Camera2D
+var camera: Camera3D
 var human: Footballer
 var score := [0, 0]
 var time_left := Config.MATCH_SECONDS
@@ -47,11 +47,17 @@ var _last_scorer := 0
 var _switch_cooldown := 0.0
 var _shake := 0.0
 var _clock := 0.0
+var _cine_timer := 0.0
+var _cine_shooter: Footballer = null
+var _cine_dir := Vector2.RIGHT
+var _celebrant: Footballer = null
+var _cam_pos := Vector3(0, 14, 22)
+var _cam_look := Vector3.ZERO
 
 
 func _ready() -> void:
 	_register_inputs()
-	add_child(Pitch.new())
+	add_child(Stadium.new())
 	for t in 2:
 		for slot: Dictionary in FORMATION:
 			var p := Footballer.new()
@@ -59,26 +65,23 @@ func _ready() -> void:
 			p.role = slot["role"]
 			p.number = slot["num"]
 			p.formation = slot["pos"]
-			p.z_index = 1
 			add_child(p)
 			teams[t].append(p)
 
 	ball = Ball.new()
-	ball.z_index = 2
 	ball.goal_scored.connect(_on_goal)
 	add_child(ball)
 
-	vision = FieldVision.new()
-	vision.game = self
-	vision.z_index = 5
-	add_child(vision)
-
-	camera = Camera2D.new()
+	camera = Camera3D.new()
+	camera.fov = 42.0
 	add_child(camera)
 	camera.make_current()
 
 	var ui := CanvasLayer.new()
 	add_child(ui)
+	vision = FieldVision.new()
+	vision.game = self
+	ui.add_child(vision)
 	hud = Hud.new()
 	hud.game = self
 	ui.add_child(hud)
@@ -105,16 +108,21 @@ func _register_inputs() -> void:
 
 func _start_kickoff(team_with_ball: int) -> void:
 	state = State.KICKOFF
+	end_cinematic()
+	Engine.time_scale = 1.0
+	if _celebrant != null:
+		_celebrant.model.set_celebrating(false)
+		_celebrant = null
 	_state_timer = 1.4
 	for t in 2:
 		for p: Footballer in teams[t]:
-			p.position = formation_to_world(t, p.formation)
+			p.pos = formation_to_world(t, p.formation)
 			p.velocity = Vector2.ZERO
 			p.desired_velocity = Vector2.ZERO
 			p.facing = Vector2(Config.attack_dir(t), 0)
 			p.stun = 0.0
 	var taker: Footballer = teams[team_with_ball][4]
-	taker.position = Vector2(-Config.attack_dir(team_with_ball) * 30.0, 0)
+	taker.pos = Vector2(-Config.attack_dir(team_with_ball) * 30.0, 0)
 	ball.place(Vector2.ZERO)
 	ball.holder = taker
 	_last_holder = taker
@@ -131,6 +139,12 @@ func _on_goal(scoring_team: int) -> void:
 	state = State.GOAL
 	_state_timer = 3.0
 	vision.deactivate()
+	end_cinematic()
+	var scorer := ball.last_kicker
+	if scorer == null or scorer.team != scoring_team:
+		scorer = nearest_to(scoring_team, ball.pos, false)
+	_celebrant = scorer
+	_celebrant.model.set_celebrating(true)
 	_shake = 18.0
 	hud.show_banner("GOAL!!", Config.TEAM_COLORS[scoring_team], 2.6, 1.2)
 
@@ -157,13 +171,16 @@ func handle_screen_tap(screen_pos: Vector2) -> bool:
 		return true
 	if not vision.active or ball.holder != human:
 		return false
-	var world := get_canvas_transform().affine_inverse() * screen_pos
-	var radius := 60.0 / camera.zoom.x
 	var target: Footballer = null
+	var best_d := 70.0
 	for mate: Footballer in teams[0]:
-		if mate != human and mate.position.distance_to(world) < radius:
-			if target == null or mate.position.distance_to(world) < target.position.distance_to(world):
-				target = mate
+		var world := Config.to_3d(mate.pos) + Vector3(0, 1.0, 0)
+		if mate == human or camera.is_position_behind(world):
+			continue
+		var d := camera.unproject_position(world).distance_to(screen_pos)
+		if d < best_d:
+			best_d = d
+			target = mate
 	if target == null:
 		return false
 	pass_to(human, target)
@@ -181,6 +198,7 @@ func _process(delta: float) -> void:
 			_restart()
 	elif state == State.PLAYING and not autopilot:
 		_handle_actions()
+	human.hide_marker = cinematic_active() or state == State.GOAL
 	_update_camera(real)
 
 
@@ -233,9 +251,9 @@ func _update_human_movement() -> void:
 	if v.length() > 0.1:
 		var mult := Config.DRIBBLE_SPEED_MULT if ball.holder == human else 1.0
 		human.desired_velocity = v * Config.PLAYER_SPEED * mult
-	elif ball.intended_receiver == human or (ball.holder == null and human.position.distance_to(ball.position) < 140.0):
+	elif ball.intended_receiver == human or (ball.holder == null and human.pos.distance_to(ball.pos) < 140.0):
 		# Help the player: step towards a pass or a nearby loose ball.
-		human.desired_velocity = _steer(human, ball.position, 1.0)
+		human.desired_velocity = _steer(human, ball.pos, 1.0)
 	else:
 		human.desired_velocity = Vector2.ZERO
 
@@ -252,8 +270,8 @@ func _handle_actions() -> void:
 				pass_to(human, target)
 				vision.deactivate()
 		elif Input.is_action_just_pressed("shoot"):
-			shoot(human, v.y)
 			vision.deactivate()
+			shoot(human, v.y)
 	elif Input.is_action_just_pressed("pass"):
 		_switch_to_nearest()
 
@@ -261,13 +279,12 @@ func _handle_actions() -> void:
 func _set_human(p: Footballer) -> void:
 	if human != null:
 		human.is_human = false
-		human.queue_redraw()
 	human = p
 	human.is_human = true
 
 
 func _switch_to_nearest() -> void:
-	var nearest := nearest_to(0, ball.position, true)
+	var nearest := nearest_to(0, ball.pos, true)
 	if nearest != null and nearest != human:
 		_set_human(nearest)
 		_switch_cooldown = 0.8
@@ -278,30 +295,77 @@ func _auto_switch() -> void:
 		return
 	if ball.intended_receiver != null and ball.intended_receiver.team == 0:
 		return
-	var nearest := nearest_to(0, ball.position, true)
+	var nearest := nearest_to(0, ball.pos, true)
 	if nearest == null or nearest == human:
 		return
-	if human.position.distance_to(ball.position) > nearest.position.distance_to(ball.position) + 160.0:
+	if human.pos.distance_to(ball.pos) > nearest.pos.distance_to(ball.pos) + 160.0:
 		_set_human(nearest)
 		_switch_cooldown = 0.8
 
 
+## Camera director: broadcast view following the ball, a low cinematic angle
+## behind the shooter, an orbit around the scorer, and a bird's-eye view for vision.
 func _update_camera(real: float) -> void:
-	var vs := get_viewport_rect().size
-	var target_pos := Vector2.ZERO
-	var target_zoom := minf(vs.x / (Config.PITCH_LENGTH + 260.0), vs.y / (Config.PITCH_WIDTH + 220.0))
-	if not vision.active:
-		target_zoom = clampf(vs.y / 740.0, 0.5, 1.5)
-		target_pos = ball.position + ball.velocity * 0.2
-		var half := vs / (2.0 * target_zoom)
-		var lim := Vector2(Config.HALF_L + 160.0, Config.HALF_W + 140.0) - half
-		target_pos.x = clampf(target_pos.x, -maxf(lim.x, 0.0), maxf(lim.x, 0.0))
-		target_pos.y = clampf(target_pos.y, -maxf(lim.y, 0.0), maxf(lim.y, 0.0))
-	camera.position = camera.position.lerp(target_pos, 1.0 - exp(-5.0 * real))
-	var z := lerpf(camera.zoom.x, target_zoom, 1.0 - exp(-6.0 * real))
-	camera.zoom = Vector2(z, z)
+	var ball3 := Config.to_3d(ball.pos, ball.height)
+	var target_pos: Vector3
+	var target_look: Vector3
+	var fov := 42.0
+	var follow := 4.0
+	if vision.active:
+		target_pos = Vector3(0, 52, 26)
+		target_look = Vector3(0, 0, 1.5)
+		fov = 48.0
+	elif _cine_timer > 0.0 and _cine_shooter != null:
+		var d3 := Vector3(_cine_dir.x, 0, _cine_dir.y)
+		var shooter := Config.to_3d(_cine_shooter.pos)
+		_cine_timer -= real
+		if _cine_timer <= 0.0:
+			end_cinematic()
+		target_pos = shooter - d3 * 3.4 + Vector3(0, 1.3, 0) + d3.cross(Vector3.UP) * 1.6
+		target_look = shooter + d3 * 6.0 + Vector3(0, 1.0, 0)
+		fov = 58.0
+		follow = 14.0
+	elif state == State.GOAL and _celebrant != null:
+		var c := Config.to_3d(_celebrant.pos)
+		var a := _clock * 0.7
+		target_pos = c + Vector3(cos(a) * 6.5, 2.6, sin(a) * 6.5)
+		target_look = c + Vector3(0, 1.2, 0)
+		fov = 50.0
+	else:
+		var lead := Vector3(ball.velocity.x, 0, ball.velocity.y) * Config.WORLD_SCALE * 0.3
+		target_look = Vector3(ball3.x, 0, ball3.z * 0.8) + lead
+		var lim := Config.HALF_L * Config.WORLD_SCALE - 7.0
+		target_look.x = clampf(target_look.x, -lim, lim)
+		target_pos = Vector3(target_look.x, 11.5, target_look.z * 0.45 + 18.5)
+	var t := 1.0 - exp(-follow * real)
+	_cam_pos = _cam_pos.lerp(target_pos, t)
+	_cam_look = _cam_look.lerp(target_look, t)
+	camera.position = _cam_pos
+	if not _cam_pos.is_equal_approx(_cam_look):
+		camera.look_at(_cam_look)
+	camera.fov = lerpf(camera.fov, fov, t)
 	_shake = maxf(_shake - 40.0 * real, 0.0)
-	camera.offset = Vector2(randf_range(-1, 1), randf_range(-1, 1)) * _shake
+	camera.h_offset = randf_range(-1, 1) * _shake * 0.02
+	camera.v_offset = randf_range(-1, 1) * _shake * 0.02
+
+
+func cinematic_active() -> bool:
+	return _cine_timer > 0.0
+
+
+func _start_cinematic(shooter: Footballer, dir: Vector2) -> void:
+	_cine_shooter = shooter
+	_cine_dir = dir
+	_cine_timer = 0.7
+	Engine.time_scale = 0.3
+
+
+func end_cinematic() -> void:
+	if _cine_timer > 0.0 or _cine_shooter != null:
+		_cine_timer = 0.0
+		_cine_shooter = null
+		if not vision.active:
+			Engine.time_scale = 1.0
 
 
 # --- Team AI ----------------------------------------------------------------
@@ -309,7 +373,7 @@ func _update_camera(real: float) -> void:
 func _update_ai(delta: float) -> void:
 	_auto_switch()
 	var owner_team := ball.holder.team if ball.holder != null else -1
-	var predicted := ball.position + ball.velocity * 0.35
+	var predicted := ball.pos + ball.velocity * 0.35
 	for t in 2:
 		var chaser: Footballer = null
 		if owner_team != t:
@@ -325,14 +389,14 @@ func _update_ai(delta: float) -> void:
 			elif p.role == Footballer.GK:
 				_ai_goalkeeper(p)
 			elif p == chaser:
-				var target := predicted if ball.holder == null else ball.position
+				var target := predicted if ball.holder == null else ball.pos
 				p.desired_velocity = _steer(p, target, 1.0)
 			else:
 				p.desired_velocity = _steer(p, _support_position(p, owner_team == t), 0.85)
 
 
 func _steer(p: Footballer, target: Vector2, speed_factor: float) -> Vector2:
-	var to := target - p.position
+	var to := target - p.pos
 	var d := to.length()
 	if d < 6.0:
 		return Vector2.ZERO
@@ -344,7 +408,7 @@ func _steer(p: Footballer, target: Vector2, speed_factor: float) -> Vector2:
 ## push up in possession and drop off without it.
 func _support_position(p: Footballer, attacking: bool) -> Vector2:
 	var dir := Config.attack_dir(p.team)
-	var ball_x := ball.position.x * dir / Config.HALF_L
+	var ball_x := ball.pos.x * dir / Config.HALF_L
 	var x := p.formation.x + 0.5 * (ball_x + 0.2)
 	if attacking:
 		x += 0.3 if p.role == Footballer.FWD else 0.22
@@ -357,7 +421,7 @@ func _support_position(p: Footballer, attacking: bool) -> Vector2:
 			x = clampf(x, -0.7, 0.65)
 		_:
 			x = clampf(x, -0.45, 0.85)
-	var y := p.formation.y + (ball.position.y / Config.HALF_W) * 0.35
+	var y := p.formation.y + (ball.pos.y / Config.HALF_W) * 0.35
 	if attacking and p.role != Footballer.DEF:
 		y += sin(_clock * 0.7 + p.number) * 0.12
 	return Vector2(x * Config.HALF_L * dir, clampf(y, -0.9, 0.9) * Config.HALF_W)
@@ -367,23 +431,23 @@ func _ai_goalkeeper(p: Footballer) -> void:
 	var dir := Config.attack_dir(p.team)
 	var goal := Vector2(-dir * Config.HALF_L, 0)
 	var limit := Config.GOAL_WIDTH * 0.45
-	if ball.holder == null and ball.position.distance_to(goal) < 260.0:
-		p.desired_velocity = _steer(p, ball.position + ball.velocity * 0.2, 1.1)
+	if ball.holder == null and ball.pos.distance_to(goal) < 260.0:
+		p.desired_velocity = _steer(p, ball.pos + ball.velocity * 0.2, 1.1)
 		return
-	var target := goal + Vector2(dir * 40.0, clampf(ball.position.y * 0.25, -limit, limit))
+	var target := goal + Vector2(dir * 40.0, clampf(ball.pos.y * 0.25, -limit, limit))
 	if ball.holder == null and ball.velocity.x * -dir > 400.0:
-		var tt := (target.x - ball.position.x) / ball.velocity.x
+		var tt := (target.x - ball.pos.x) / ball.velocity.x
 		if tt > 0.0 and tt < 1.5:
-			target.y = clampf(ball.position.y + ball.velocity.y * tt, -Config.GOAL_WIDTH * 0.6, Config.GOAL_WIDTH * 0.6)
+			target.y = clampf(ball.pos.y + ball.velocity.y * tt, -Config.GOAL_WIDTH * 0.6, Config.GOAL_WIDTH * 0.6)
 	p.desired_velocity = _steer(p, target, 1.15)
 
 
 func _ai_carry(p: Footballer) -> void:
 	var dir := Config.attack_dir(p.team)
 	var goal := Vector2(dir * Config.HALF_L, 0)
-	var dist_goal := p.position.distance_to(goal)
-	var opp := nearest_to(1 - p.team, p.position, false)
-	var pressure := opp.position.distance_to(p.position) if opp != null else 9999.0
+	var dist_goal := p.pos.distance_to(goal)
+	var opp := nearest_to(1 - p.team, p.pos, false)
+	var pressure := opp.pos.distance_to(p.pos) if opp != null else 9999.0
 
 	if p.decision_timer <= 0.0:
 		p.decision_timer = randf_range(0.25, 0.45)
@@ -392,7 +456,7 @@ func _ai_carry(p: Footballer) -> void:
 			if outlet != null:
 				pass_to(p, outlet)
 				return
-		if dist_goal < 430.0 and absf(p.position.y) < 380.0 and (pressure > 60.0 or randf() < 0.5):
+		if dist_goal < 430.0 and absf(p.pos.y) < 380.0 and (pressure > 60.0 or randf() < 0.5):
 			shoot(p, randf_range(-0.85, 0.85))
 			return
 		if pressure < 90.0:
@@ -402,13 +466,13 @@ func _ai_carry(p: Footballer) -> void:
 				return
 		elif randf() < 0.15:
 			var forward := best_pass_target(p, Vector2(dir, 0))
-			if forward != null and (forward.position.x - p.position.x) * dir > 150.0:
+			if forward != null and (forward.pos.x - p.pos.x) * dir > 150.0:
 				pass_to(p, forward)
 				return
 
-	var want := (goal - p.position).normalized()
+	var want := (goal - p.pos).normalized()
 	if opp != null and pressure < 150.0:
-		want = (want + (p.position - opp.position).normalized() * 0.8).normalized()
+		want = (want + (p.pos - opp.pos).normalized() * 0.8).normalized()
 	p.desired_velocity = want * Config.PLAYER_SPEED * Config.DRIBBLE_SPEED_MULT
 
 
@@ -420,7 +484,7 @@ func nearest_to(team: int, point: Vector2, exclude_keeper: bool) -> Footballer:
 	for p: Footballer in teams[team]:
 		if exclude_keeper and p.role == Footballer.GK:
 			continue
-		var d := p.position.distance_squared_to(point)
+		var d := p.pos.distance_squared_to(point)
 		if d < best_d:
 			best_d = d
 			best = p
@@ -431,19 +495,19 @@ func nearest_to(team: int, point: Vector2, exclude_keeper: bool) -> Footballer:
 func lane_clearance(a: Vector2, b: Vector2, opponent_team: int) -> float:
 	var clearance := INF
 	for o: Footballer in teams[opponent_team]:
-		var closest := Geometry2D.get_closest_point_to_segment(o.position, a, b)
-		clearance = minf(clearance, closest.distance_to(o.position))
+		var closest := Geometry2D.get_closest_point_to_segment(o.pos, a, b)
+		clearance = minf(clearance, closest.distance_to(o.pos))
 	return clearance
 
 
 func pass_score(from: Footballer, mate: Footballer) -> float:
 	var dir := Config.attack_dir(from.team)
-	var s := clampf(lane_clearance(from.position, mate.position, 1 - from.team) / 80.0, 0.0, 1.5)
-	s += (mate.position.x - from.position.x) * dir / 600.0
-	s -= absf(from.position.distance_to(mate.position) - 320.0) / 700.0
-	var marker := nearest_to(1 - from.team, mate.position, false)
+	var s := clampf(lane_clearance(from.pos, mate.pos, 1 - from.team) / 80.0, 0.0, 1.5)
+	s += (mate.pos.x - from.pos.x) * dir / 600.0
+	s -= absf(from.pos.distance_to(mate.pos) - 320.0) / 700.0
+	var marker := nearest_to(1 - from.team, mate.pos, false)
 	if marker != null:
-		s += clampf(marker.position.distance_to(mate.position) / 150.0, 0.0, 1.0)
+		s += clampf(marker.pos.distance_to(mate.pos) / 150.0, 0.0, 1.0)
 	return s
 
 
@@ -455,7 +519,7 @@ func best_pass_target(from: Footballer, aim: Vector2) -> Footballer:
 	for mate: Footballer in teams[from.team]:
 		if mate == from:
 			continue
-		var to := mate.position - from.position
+		var to := mate.pos - from.pos
 		var d := to.length()
 		if d < PASS_MIN or d > PASS_MAX:
 			continue
@@ -470,19 +534,20 @@ func best_pass_target(from: Footballer, aim: Vector2) -> Footballer:
 
 
 func pass_to(from: Footballer, to: Footballer) -> void:
-	var lead := to.position + to.velocity * 0.4
-	var offset := lead - from.position
+	var lead := to.pos + to.velocity * 0.4
+	var offset := lead - from.pos
 	var d := offset.length()
 	if d < 1.0:
 		return
 	var lift := 0.0
 	var spd := clampf(d * Ball.GROUND_DAMP + 250.0, 420.0, 1300.0)
-	if lane_clearance(from.position, lead, 1 - from.team) < 30.0 and d > 220.0:
+	if lane_clearance(from.pos, lead, 1 - from.team) < 30.0 and d > 220.0:
 		# Lane is blocked: chip it over. Airtime T = 2 * lift / g.
 		lift = clampf(d * 0.75, 260.0, 520.0)
 		var airtime := 2.0 * lift / Ball.GRAVITY
 		spd = d / airtime * (1.0 + Ball.AIR_DAMP * airtime * 0.5) * 0.9
 	from.facing = offset / d
+	from.play_kick()
 	ball.kick(offset / d * spd, lift, from, to)
 	if from.team == 0:
 		_set_human(to)
@@ -491,14 +556,17 @@ func pass_to(from: Footballer, to: Footballer) -> void:
 func shoot(p: Footballer, aim: float) -> void:
 	var dir := Config.attack_dir(p.team)
 	var target := Vector2(dir * (Config.HALF_L + 30.0), clampf(aim, -1.0, 1.0) * (Config.GOAL_WIDTH * 0.5 - 18.0))
-	var err := p.position.distance_to(target) / 1000.0 * 70.0
+	var err := p.pos.distance_to(target) / 1000.0 * 70.0
 	target.y += randf_range(-err, err)
-	var v := (target - p.position).normalized() * SHOT_SPEED
+	var v := (target - p.pos).normalized() * SHOT_SPEED
 	p.facing = v.normalized()
-	ball.kick(v, randf_range(40.0, 200.0) * minf(p.position.distance_to(target) / 600.0, 1.0), p)
+	p.play_kick()
+	ball.kick(v, randf_range(40.0, 200.0) * minf(p.pos.distance_to(target) / 600.0, 1.0), p)
 	_shake = 6.0
 	stats["shots"][p.team] += 1
 	hud.show_banner("SHOOT!", Config.TEAM_COLORS[p.team], 0.55, 0.55)
+	if not autopilot or p.team == 0:
+		_start_cinematic(p, v.normalized())
 
 
 func _separate_players() -> void:
@@ -508,12 +576,12 @@ func _separate_players() -> void:
 		for j in range(i + 1, all.size()):
 			var a: Footballer = all[i]
 			var b: Footballer = all[j]
-			var d := b.position - a.position
+			var d := b.pos - a.pos
 			var dist := d.length()
 			if dist < min_d and dist > 0.01:
 				var push := d / dist * (min_d - dist) * 0.5
-				a.position -= push
-				b.position += push
+				a.pos -= push
+				b.pos += push
 
 
 func _handle_ball_contacts() -> void:
@@ -527,7 +595,7 @@ func _handle_ball_contacts() -> void:
 				if p.stun > 0.0 or not ball.can_be_taken_by(p):
 					continue
 				var reach := Config.PLAYER_RADIUS + Config.BALL_RADIUS + (16.0 if p.role == Footballer.GK else 4.0)
-				var d := p.position.distance_to(ball.position)
+				var d := p.pos.distance_to(ball.pos)
 				if d < reach and d < best_d:
 					best = p
 					best_d = d
@@ -547,7 +615,7 @@ func _handle_ball_contacts() -> void:
 	for p: Footballer in teams[1 - h.team]:
 		if p.tackle_cooldown > 0.0 or p.stun > 0.0:
 			continue
-		if p.position.distance_to(ball.position) < Config.PLAYER_RADIUS + Config.BALL_RADIUS + 6.0:
+		if p.pos.distance_to(ball.pos) < Config.PLAYER_RADIUS + Config.BALL_RADIUS + 6.0:
 			p.tackle_cooldown = 0.9
 			var chance := 0.1 if h.role == Footballer.GK else 0.4
 			if randf() < chance:

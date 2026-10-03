@@ -33,14 +33,14 @@ func _process(_delta: float) -> bool:
 			vision_uses += 1
 		if game.vision.active and frames % 10 == 0:
 			var mate: Footballer = game.teams[0][randi() % 5]
-			game.handle_screen_tap(game.get_canvas_transform() * mate.position)
+			game.handle_screen_tap(game.camera.unproject_position(Config.to_3d(mate.pos) + Vector3(0, 1, 0)))
 
 	if game.ball.holder != last_holder:
 		possession_changes += 1
 		last_holder = game.ball.holder
 	assert(game.human != null and game.human.is_human)
 	assert(game.human.team == 0)
-	assert(not is_nan(game.ball.position.x))
+	assert(not is_nan(game.ball.pos.x))
 
 	if game.state == SoccerMatch.State.FULLTIME:
 		print("FULLTIME after %d frames | score %d-%d | possession changes %d | vision uses %d"

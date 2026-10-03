@@ -1,6 +1,7 @@
 class_name Ball
-extends Node2D
-## Arcade ball physics with a fake height axis for lofted passes.
+extends Node3D
+## Arcade ball physics on the 2D logic plane plus a height axis for lofted
+## passes; the 3D mesh is synced to it and rolls with the ball's velocity.
 ## The touchlines and goal lines act as walls, except for the goal mouth.
 
 signal goal_scored(scoring_team: int)
@@ -10,7 +11,10 @@ const GROUND_DAMP := 1.25
 const AIR_DAMP := 0.35
 const CROSSBAR := 70.0
 const CONTROL_HEIGHT := 32.0
+const VISUAL_RADIUS := 0.3
+const BALL_SHADER := preload("res://shaders/ball.gdshader")
 
+var pos := Vector2.ZERO
 var velocity := Vector2.ZERO
 var height := 0.0
 var vz := 0.0
@@ -19,7 +23,8 @@ var intended_receiver: Footballer = null
 var last_kicker: Footballer = null
 var frozen := false
 var _ignore_kicker := 0.0
-var _spin := 0.0
+var _mesh: MeshInstance3D
+var _shadow: MeshInstance3D
 
 
 func _physics_process(delta: float) -> void:
@@ -27,7 +32,7 @@ func _physics_process(delta: float) -> void:
 		return
 	_ignore_kicker = maxf(_ignore_kicker - delta, 0.0)
 	if holder != null:
-		position = holder.position + holder.facing * (Config.PLAYER_RADIUS + Config.BALL_RADIUS + 2.0)
+		pos = holder.pos + holder.facing * (Config.PLAYER_RADIUS + Config.BALL_RADIUS + 2.0)
 		velocity = holder.velocity
 		height = 0.0
 		vz = 0.0
@@ -43,27 +48,57 @@ func _physics_process(delta: float) -> void:
 			velocity *= exp(-GROUND_DAMP * delta)
 		if velocity.length() < 4.0:
 			velocity = Vector2.ZERO
-		position += velocity * delta
-	_spin += velocity.length() * delta * 0.05
+		pos += velocity * delta
 	_check_bounds()
-	queue_redraw()
+
+
+func _ready() -> void:
+	var sphere := SphereMesh.new()
+	sphere.radius = VISUAL_RADIUS
+	sphere.height = VISUAL_RADIUS * 2
+	sphere.radial_segments = 24
+	sphere.rings = 12
+	var mat := ShaderMaterial.new()
+	mat.shader = BALL_SHADER
+	mat.next_pass = Toon.outline_material(0.025)
+	_mesh = Toon.mesh_instance(sphere, mat)
+	add_child(_mesh)
+
+	var blob := CylinderMesh.new()
+	blob.top_radius = VISUAL_RADIUS * 1.1
+	blob.bottom_radius = VISUAL_RADIUS * 1.1
+	blob.height = 0.01
+	_shadow = Toon.mesh_instance(blob, Toon.flat(Color(0, 0, 0, 0.35)), Vector3(0, 0.03, 0))
+	_shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_shadow)
+
+
+func _process(delta: float) -> void:
+	position = Config.to_3d(pos)
+	_mesh.position.y = VISUAL_RADIUS + height * Config.WORLD_SCALE
+	var v3 := Vector3(velocity.x, 0, velocity.y) * Config.WORLD_SCALE
+	if v3.length() > 0.05:
+		# Rolling axis is up x velocity.
+		_mesh.rotate(Vector3(v3.z, 0, -v3.x).normalized(), v3.length() * delta / VISUAL_RADIUS)
+	var s := 1.0 - minf(height * Config.WORLD_SCALE / 6.0, 0.6)
+	_shadow.scale = Vector3(s, 1, s)
 
 
 func _check_bounds() -> void:
-	if absf(position.x) > Config.HALF_L:
-		var side := signf(position.x)
-		var in_mouth := absf(position.y) < Config.GOAL_WIDTH / 2 - Config.BALL_RADIUS and height < CROSSBAR
+	if absf(pos.x) > Config.HALF_L:
+		var side := signf(pos.x)
+		var in_mouth := absf(pos.y) < Config.GOAL_WIDTH / 2 - Config.BALL_RADIUS and height < CROSSBAR
 		if in_mouth:
-			if absf(position.x) > Config.HALF_L + Config.BALL_RADIUS:
+			if absf(pos.x) > Config.HALF_L + Config.BALL_RADIUS:
 				frozen = true
 				holder = null
 				velocity = Vector2.ZERO
 				goal_scored.emit(0 if side > 0 else 1)
 			return
-		position.x = side * Config.HALF_L
+		pos.x = side * Config.HALF_L
 		velocity.x = -velocity.x * 0.5
-	if absf(position.y) > Config.HALF_W:
-		position.y = signf(position.y) * Config.HALF_W
+	if absf(pos.y) > Config.HALF_W:
+		pos.y = signf(pos.y) * Config.HALF_W
 		velocity.y = -velocity.y * 0.5
 
 
@@ -90,34 +125,12 @@ func can_be_taken_by(p: Footballer) -> bool:
 	return not frozen and height < CONTROL_HEIGHT and not (p == last_kicker and _ignore_kicker > 0.0)
 
 
-func place(pos: Vector2) -> void:
+func place(at: Vector2) -> void:
 	holder = null
 	intended_receiver = null
 	last_kicker = null
-	position = pos
+	pos = at
 	velocity = Vector2.ZERO
 	height = 0.0
 	vz = 0.0
 	frozen = false
-
-
-func _draw() -> void:
-	var r := Config.BALL_RADIUS
-	var s := 1.0 + height / 220.0
-	draw_set_transform(Vector2(2, 5), 0, Vector2(1, 0.5))
-	draw_circle(Vector2.ZERO, r * (1.0 - minf(height / 300.0, 0.5)), Color(0, 0, 0, 0.35))
-	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
-
-	var c := Vector2(0, -height * 0.6)
-	var speed := velocity.length()
-	if holder == null and speed > 650.0:
-		# Anime speed lines trailing the ball.
-		var back := -velocity / speed
-		var side := back.orthogonal()
-		for i in 4:
-			var off := side * (float(i) - 1.5) * 5.0
-			var length := 30.0 + 18.0 * float((i * 7) % 3)
-			draw_line(c + off + back * (r + 4), c + off + back * (r + 4 + length), Color(1, 1, 1, 0.55), 2.0)
-	draw_circle(c, r * s + 2, Config.INK)
-	draw_circle(c, r * s, Color.WHITE)
-	draw_circle(c + Vector2(cos(_spin), sin(_spin)) * r * 0.45 * s, r * 0.35 * s, Config.INK)

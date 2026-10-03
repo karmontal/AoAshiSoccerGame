@@ -26,6 +26,8 @@ func _process(delta: float) -> void:
 func _draw() -> void:
 	var vs := get_viewport_rect().size
 	var font := ThemeDB.fallback_font
+	if game.cinematic_active():
+		_draw_focus_lines(vs)
 	_draw_scoreboard(vs, font)
 	if game.vision.active:
 		_text(font, Vector2(0, vs.y - 28), "VISION  -  tap a teammate to pass", 22, Color(0.6, 0.9, 1.0), vs.x)
@@ -89,6 +91,22 @@ func _draw_banner(vs: Vector2, font: Font) -> void:
 	draw_string_outline(font, Vector2(x + 8, cy + size * 0.35 + 6), _banner_text, HORIZONTAL_ALIGNMENT_CENTER, vs.x, size, 14, Config.INK)
 	draw_string_outline(font, Vector2(x, cy + size * 0.35), _banner_text, HORIZONTAL_ALIGNMENT_CENTER, vs.x, size, 10, _banner_color)
 	draw_string(font, Vector2(x, cy + size * 0.35), _banner_text, HORIZONTAL_ALIGNMENT_CENTER, vs.x, size, Color.WHITE)
+
+
+## Manga-style radial focus lines around the screen edge.
+func _draw_focus_lines(vs: Vector2) -> void:
+	var center := vs / 2
+	var outer := vs.length() * 0.6
+	var jitter := int(_banner_time * 30.0)
+	for i in 64:
+		var k := float((i * 37 + jitter * 13) % 101) / 101.0
+		var a := TAU * (float(i) + k * 0.6) / 64.0
+		var dir := Vector2.from_angle(a)
+		var inner := outer * (0.55 + 0.2 * k)
+		var w := 2.0 + 5.0 * k
+		var side := dir.orthogonal() * w
+		draw_colored_polygon(PackedVector2Array([
+			center + dir * outer + side, center + dir * outer - side, center + dir * inner]), Color(1, 1, 1, 0.55))
 
 
 func _draw_fulltime(vs: Vector2, font: Font) -> void:

@@ -2,5 +2,5 @@
 
 [ext_resource type="Script" path="res://scripts/soccer_match.gd" id="1_match"]
 
-[node name="Main" type="Node2D"]
+[node name="Main" type="Node3D"]
 script = ExtResource("1_match")

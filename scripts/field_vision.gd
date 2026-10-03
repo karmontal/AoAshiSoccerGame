@@ -1,10 +1,11 @@
 class_name FieldVision
 extends Node2D
-## "Field vision": the signature ability. Slows time, pulls the camera up to a
+## "Field vision": the signature ability. Slows time, lifts the camera to a
 ## bird's-eye view and paints every passing lane so the player can read the game.
 ## With the ball: lanes to teammates (green = open, yellow = risky, red = blocked)
 ## and a tap on a teammate plays the pass. Without it: the carrier's options,
 ## so you can see which lane to cut off.
+## Lives in the UI layer and draws in screen space by projecting the 3D scene.
 
 const SLOW_SCALE := 0.18
 const DRAIN_PER_SEC := 0.30
@@ -14,8 +15,8 @@ const MIN_ENERGY := 0.25
 const OPEN := Color(0.35, 1.0, 0.55)
 const RISKY := Color(1.0, 0.85, 0.25)
 const BLOCKED := Color(1.0, 0.3, 0.3)
-const TINT := Color(0.02, 0.06, 0.18, 0.5)
-const GRID := Color(0.4, 0.8, 1.0, 0.14)
+const TINT := Color(0.02, 0.06, 0.18, 0.35)
+const GRID := Color(0.5, 0.85, 1.0, 0.22)
 
 var game: SoccerMatch
 var energy := 1.0
@@ -38,6 +39,7 @@ func activate() -> void:
 	if active or not can_activate():
 		return
 	active = true
+	game.end_cinematic()
 	Engine.time_scale = SLOW_SCALE
 	game.hud.show_banner("VISION", Color(0.3, 0.8, 1.0), 0.8, 0.6)
 
@@ -70,46 +72,48 @@ static func lane_color(clearance: float) -> Color:
 	return BLOCKED
 
 
+## Logic-plane point to screen position.
+func to_screen(p: Vector2) -> Vector2:
+	return game.camera.unproject_position(Config.to_3d(p))
+
+
 func _draw() -> void:
 	if not active:
 		return
+	draw_rect(get_viewport_rect(), TINT)
 	var hl := Config.HALF_L
 	var hw := Config.HALF_W
-	draw_rect(Rect2(-hl - 500, -hw - 500, Config.PITCH_LENGTH + 1000, Config.PITCH_WIDTH + 1000), TINT)
 	for i in range(-5, 6):
-		draw_line(Vector2(i * hl / 5.0, -hw), Vector2(i * hl / 5.0, hw), GRID, 2.0 * maxf(1.0, 0.7 / maxf(game.camera.zoom.x, 0.1)))
+		draw_line(to_screen(Vector2(i * hl / 5.0, -hw)), to_screen(Vector2(i * hl / 5.0, hw)), GRID, 1.5)
 	for i in range(-3, 4):
-		draw_line(Vector2(-hl, i * hw / 3.0), Vector2(hl, i * hw / 3.0), GRID, 2.0 * maxf(1.0, 0.7 / maxf(game.camera.zoom.x, 0.1)))
+		draw_line(to_screen(Vector2(-hl, i * hw / 3.0)), to_screen(Vector2(hl, i * hw / 3.0)), GRID, 1.5)
 
 	var carrier: Footballer = game.ball.holder
 	if carrier == null:
 		carrier = game.human
-	var mates: Array = game.teams[carrier.team]
-	var opponents: Array = game.teams[1 - carrier.team]
-	# Strokes are in world units; scale them so they stay readable when zoomed out.
-	var k := 0.7 / maxf(game.camera.zoom.x, 0.1)
-	var pulse := sin(_t * 7.0) * 3.0 * k
+	var from := to_screen(carrier.pos)
+	var pulse := sin(_t * 7.0) * 2.0
 
-	for o: Footballer in opponents:
-		draw_arc(o.position, Config.PLAYER_RADIUS + 10 * k, 0, TAU, 24, Color(1, 0.3, 0.3, 0.7), 3 * k)
+	for o: Footballer in game.teams[1 - carrier.team]:
+		draw_arc(to_screen(o.pos), 16, 0, TAU, 24, Color(1, 0.3, 0.3, 0.8), 2.5)
 
 	var best: Footballer = game.best_pass_target(carrier, carrier.facing)
-	for mate: Footballer in mates:
+	for mate: Footballer in game.teams[carrier.team]:
 		if mate == carrier:
 			continue
-		var clearance := game.lane_clearance(carrier.position, mate.position, 1 - carrier.team)
-		var col := lane_color(clearance)
+		var col := lane_color(game.lane_clearance(carrier.pos, mate.pos, 1 - carrier.team))
 		if carrier.team != 0:
 			col = col.lerp(Color(1, 0.4, 0.2), 0.5)
-		var width := (7.0 if mate == best else 3.0) * k
-		draw_dashed_line(carrier.position, mate.position, Config.INK, width + 4.0 * k, 18.0 * k)
-		draw_dashed_line(carrier.position, mate.position, col, width, 18.0 * k)
-		draw_arc(mate.position, Config.PLAYER_RADIUS + 14 * k + pulse, 0, TAU, 32, col, 4 * k)
+		var width := 6.0 if mate == best else 3.0
+		var to := to_screen(mate.pos)
+		draw_dashed_line(from, to, Config.INK, width + 3.0, 14.0)
+		draw_dashed_line(from, to, col, width, 14.0)
+		draw_arc(to, 20 + pulse, 0, TAU, 32, Config.INK, 6)
+		draw_arc(to, 20 + pulse, 0, TAU, 32, col, 3)
 
 	if best != null:
 		var font := ThemeDB.fallback_font
 		var label := "BEST" if carrier.team == 0 else "DANGER"
-		var size := int(24 * k)
-		var pos := best.position + Vector2(-100 * k, -Config.PLAYER_RADIUS - 26 * k)
-		draw_string_outline(font, pos, label, HORIZONTAL_ALIGNMENT_CENTER, 200 * k, size, int(6 * k), Config.INK)
-		draw_string(font, pos, label, HORIZONTAL_ALIGNMENT_CENTER, 200 * k, size, Color(1, 0.9, 0.3))
+		var pos := to_screen(best.pos) + Vector2(-60, -30)
+		draw_string_outline(font, pos, label, HORIZONTAL_ALIGNMENT_CENTER, 120, 22, 6, Config.INK)
+		draw_string(font, pos, label, HORIZONTAL_ALIGNMENT_CENTER, 120, 22, Color(1, 0.9, 0.3))
