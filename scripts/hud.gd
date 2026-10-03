@@ -29,6 +29,7 @@ func _draw() -> void:
 	if game.cinematic_active():
 		_draw_focus_lines(vs)
 	_draw_scoreboard(vs, font)
+	draw_string(font, Vector2(12, 26), "%d FPS" % Engine.get_frames_per_second(), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1, 0.6))
 	if game.vision.active:
 		_text(font, Vector2(0, vs.y - 28), "VISION  -  tap a teammate to pass", 22, Color(0.6, 0.9, 1.0), vs.x)
 	if _banner_time < _banner_duration:

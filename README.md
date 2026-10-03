@@ -53,9 +53,24 @@
 1. نزّل [Godot 4.4+](https://godotengine.org/download).
 2. افتح `project.godot` واضغط ▶️ (F5). الماوس يحاكي اللمس على الكمبيوتر.
 
-### على الجوال (أندرويد)
-`Project → Install Android Build Template` ثم `Project → Export → Android`
-(يحتاج Android SDK و JDK 17 حسب [دليل Godot](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_android.html)).
+### على الجوال (أندرويد) 📱
+مع كل تحديث على `main`، يبني GitHub Actions ملف APK موقّعاً، ويختبره بمحاكاة مباراة كاملة،
+ثم ينشره في صفحة **[android-latest](../../releases/tag/android-latest)**.
+
+1. افتح صفحة الـ Release من جوالك، ونزّل `AoSoccer.apk`.
+2. افتح الملف واسمح بـ "التثبيت من مصادر غير معروفة" إذا طلبها الجوال.
+3. شغّل اللعبة. عدّاد الـ FPS بالزاوية يوضّح سرعة الأداء.
+
+يشتغل على أندرويد 5 وما فوق، بمعمارية ARM 32 و 64 بت.
+
+**التحديثات:** كل بناء يوقَّع بمفتاح مؤقت، فلازم تحذف النسخة القديمة قبل تثبيت الجديدة.
+عشان تثبّت التحديثات فوق بعض، أضف مفتاحاً ثابتاً في
+`Settings → Secrets and variables → Actions` بهذه الأسماء:
+`ANDROID_KEYSTORE_BASE64` و `ANDROID_KEYSTORE_PASSWORD` و `ANDROID_KEY_ALIAS`.
+
+**من محرر Godot مباشرة:** وصّل الجوال بكابل USB، وفعّل وضع المطوّر (USB debugging)،
+ثم اضغط زر أندرويد أعلى المحرر (One-click deploy). هذا يحتاج Android SDK و JDK 17،
+حسب [دليل Godot](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_android.html).
 
 ### اختبار المحاكاة
 ```bash

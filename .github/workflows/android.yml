@@ -1,0 +1,117 @@
+name: Android APK
+
+# Builds a signed release APK on every push to main and publishes it as the
+# "android-latest" pre-release, so it can be downloaded straight to a phone.
+#
+# Optional repository secrets for a stable signing key (needed to install
+# updates over a previous build without uninstalling first):
+#   ANDROID_KEYSTORE_BASE64   base64 of a .keystore / .jks file
+#   ANDROID_KEYSTORE_PASSWORD keystore (and key) password
+#   ANDROID_KEY_ALIAS         key alias
+# Without them, each build is signed with a throwaway key.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: 4.4.1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache Godot and export templates
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-android-v1
+
+      - name: Download Godot and Android templates
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          base=https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable
+          tpl=~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          mkdir -p ~/godot "$tpl"
+          curl -sSL -o godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip -d ~/godot
+          mv ~/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 ~/godot/godot
+          curl -sSL -o templates.tpz "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          unzip -q -j templates.tpz templates/android_release.apk templates/version.txt -d "$tpl"
+          rm godot.zip templates.tpz
+
+      - name: Configure Android SDK and signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          ks="$RUNNER_TEMP/release.keystore"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$ks"
+            pass="$KEYSTORE_PASS"
+            alias="$KEYSTORE_ALIAS"
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set; signing with a throwaway key (uninstall the old app before installing this build)."
+            pass=android
+            alias=aosoccer
+            keytool -genkeypair -keystore "$ks" -storepass "$pass" -keypass "$pass" -alias "$alias" \
+              -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Ao Soccer"
+          fi
+          {
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$ks"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$alias"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$pass"
+          } >> "$GITHUB_ENV"
+          mkdir -p ~/.config/godot
+          printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/android/android_sdk_path = "%s"\nexport/android/java_sdk_path = "%s"\n' \
+            "$ANDROID_SDK_ROOT" "$JAVA_HOME" > ~/.config/godot/editor_settings-4.4.tres
+
+      - name: Import project
+        run: ~/godot/godot --headless --path . --import
+
+      - name: Simulation test (full match)
+        run: |
+          ~/godot/godot --headless --path . --fixed-fps 60 -s tests/sim_test.gd 2>&1 | tee sim.log
+          grep -q "restart OK" sim.log
+          ! grep -q "SCRIPT ERROR" sim.log
+
+      - name: Export APK
+        run: |
+          mkdir -p build
+          ~/godot/godot --headless --path . --export-release Android build/AoSoccer.apk
+          test -s build/AoSoccer.apk
+          ls -la build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AoSoccer-apk
+          path: build/AoSoccer.apk
+
+      - name: Publish "android-latest" pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-latest --cleanup-tag --yes || true
+          gh release create android-latest build/AoSoccer.apk \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Android test build (latest main)" \
+            --notes "Built from ${GITHUB_SHA::7}. Download AoSoccer.apk on your phone and open it to install (allow installing from unknown sources)."
