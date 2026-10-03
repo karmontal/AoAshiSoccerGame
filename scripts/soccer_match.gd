@@ -3,7 +3,11 @@ extends Node3D
 ## Builds the match scene in code and runs everything: kickoff/goal flow,
 ## the human-controlled player, team AI, passing, shooting and possession.
 
-enum State { KICKOFF, PLAYING, GOAL, FULLTIME }
+enum State { MENU, KICKOFF, PLAYING, GOAL, FULLTIME }
+## TEAM: control switches to whoever is nearest the ball.
+## SOLO: you are always #9 and play off the ball, Ao Ashi style; teammates
+## carry the ball and you call for it.
+enum Mode { TEAM, SOLO }
 
 ## 5-a-side shape in the team's own frame (attacking +x).
 const FORMATION := [
@@ -36,7 +40,9 @@ var camera: Camera3D
 var human: Footballer
 var score := [0, 0]
 var time_left := Config.MATCH_SECONDS
-var state := State.KICKOFF
+var state := State.MENU
+var mode := Mode.TEAM
+var coach: PositioningCoach
 ## When true the human's player is also AI-driven (attract mode / balance testing).
 var autopilot := false
 var stats := {"shots": [0, 0], "saves": [0, 0]}
@@ -53,6 +59,7 @@ var _cine_dir := Vector2.RIGHT
 var _celebrant: Footballer = null
 var _cam_pos := Vector3(0, 14, 22)
 var _cam_look := Vector3.ZERO
+var _call_timer := 0.0
 
 
 func _ready() -> void:
@@ -89,8 +96,10 @@ func _ready() -> void:
 	controls.game = self
 	ui.add_child(controls)
 
+	coach = PositioningCoach.new(self)
 	human = teams[0][4]
-	_start_kickoff(0)
+	_set_human(human)
+	_enter_menu()
 
 
 func _register_inputs() -> void:
@@ -106,14 +115,32 @@ func _register_inputs() -> void:
 
 # --- Match flow -------------------------------------------------------------
 
-func _start_kickoff(team_with_ball: int) -> void:
-	state = State.KICKOFF
+func _enter_menu() -> void:
+	state = State.MENU
+	vision.deactivate()
+	_reset_positions()
+	ball.place(Vector2.ZERO)
+	_last_holder = null
+
+
+## Starts a new match in the given mode (from the menu).
+func start_match(new_mode: Mode) -> void:
+	mode = new_mode
+	score = [0, 0]
+	time_left = Config.MATCH_SECONDS
+	vision.energy = 1.0
+	stats = {"shots": [0, 0], "saves": [0, 0]}
+	coach.reset()
+	_start_kickoff(0)
+
+
+func _reset_positions() -> void:
 	end_cinematic()
 	Engine.time_scale = 1.0
+	_call_timer = 0.0
 	if _celebrant != null:
 		_celebrant.model.set_celebrating(false)
 		_celebrant = null
-	_state_timer = 1.4
 	for t in 2:
 		for p: Footballer in teams[t]:
 			p.pos = formation_to_world(t, p.formation)
@@ -121,13 +148,19 @@ func _start_kickoff(team_with_ball: int) -> void:
 			p.desired_velocity = Vector2.ZERO
 			p.facing = Vector2(Config.attack_dir(t), 0)
 			p.stun = 0.0
+
+
+func _start_kickoff(team_with_ball: int) -> void:
+	state = State.KICKOFF
+	_state_timer = 1.4
+	_reset_positions()
 	var taker: Footballer = teams[team_with_ball][4]
 	taker.pos = Vector2(-Config.attack_dir(team_with_ball) * 30.0, 0)
 	ball.place(Vector2.ZERO)
 	ball.holder = taker
 	_last_holder = taker
 	taker.decision_timer = 0.6
-	_set_human(teams[0][4] if team_with_ball == 0 else teams[0][3])
+	_set_human(teams[0][4] if mode == Mode.SOLO or team_with_ball == 0 else teams[0][3])
 	hud.show_banner("KICK OFF", Color(1, 0.9, 0.3), 1.2, 0.8)
 
 
@@ -145,6 +178,7 @@ func _on_goal(scoring_team: int) -> void:
 		scorer = nearest_to(scoring_team, ball.pos, false)
 	_celebrant = scorer
 	_celebrant.model.set_celebrating(true)
+	FX.confetti(self, Config.to_3d(_celebrant.pos), Config.TEAM_COLORS[scoring_team])
 	_shake = 18.0
 	hud.show_banner("GOAL!!", Config.TEAM_COLORS[scoring_team], 2.6, 1.2)
 
@@ -156,18 +190,16 @@ func _end_match() -> void:
 	vision.deactivate()
 
 
-func _restart() -> void:
-	score = [0, 0]
-	time_left = Config.MATCH_SECONDS
-	vision.energy = 1.0
-	_start_kickoff(0)
-
-
 ## Called by TouchControls for touches that didn't land on a button.
 ## Returns true if the tap was consumed.
 func handle_screen_tap(screen_pos: Vector2) -> bool:
+	if state == State.MENU:
+		var choice := hud.menu_choice(screen_pos)
+		if choice >= 0:
+			start_match(choice as Mode)
+		return true
 	if state == State.FULLTIME:
-		_restart()
+		_enter_menu()
 		return true
 	if not vision.active or ball.holder != human:
 		return false
@@ -193,17 +225,28 @@ func handle_screen_tap(screen_pos: Vector2) -> bool:
 func _process(delta: float) -> void:
 	var real := delta / maxf(Engine.time_scale, 0.01)
 	_clock += real
-	if state == State.FULLTIME:
+	if state == State.MENU:
+		if Input.is_action_just_pressed("pass"):
+			start_match(Mode.TEAM)
+		elif Input.is_action_just_pressed("shoot"):
+			start_match(Mode.SOLO)
+	elif state == State.FULLTIME:
 		if Input.is_action_just_pressed("pass") or Input.is_action_just_pressed("shoot"):
-			_restart()
+			_enter_menu()
 	elif state == State.PLAYING and not autopilot:
 		_handle_actions()
-	human.hide_marker = cinematic_active() or state == State.GOAL
+	human.hide_marker = cinematic_active() or state == State.GOAL or state == State.MENU
 	_update_camera(real)
 
 
 func _physics_process(delta: float) -> void:
 	match state:
+		State.MENU:
+			for t in 2:
+				for p: Footballer in teams[t]:
+					p.desired_velocity = Vector2.ZERO
+					p.step(delta)
+			return
 		State.KICKOFF:
 			_state_timer -= delta
 			if _state_timer <= 0.0:
@@ -228,6 +271,7 @@ func _physics_process(delta: float) -> void:
 		_end_match()
 		return
 	_switch_cooldown -= delta
+	_call_timer -= delta
 	if not autopilot:
 		_update_human_movement()
 	_update_ai(delta)
@@ -237,6 +281,7 @@ func _physics_process(delta: float) -> void:
 	_separate_players()
 	_handle_ball_contacts()
 	_check_possession_change()
+	coach.update(delta)
 
 
 func _input_vector() -> Vector2:
@@ -273,7 +318,20 @@ func _handle_actions() -> void:
 			vision.deactivate()
 			shoot(human, v.y)
 	elif Input.is_action_just_pressed("pass"):
-		_switch_to_nearest()
+		if mode == Mode.SOLO:
+			_call_for_ball()
+		else:
+			_switch_to_nearest()
+
+
+## SOLO mode: ask the teammate on the ball to pass to you.
+func _call_for_ball() -> void:
+	var h := ball.holder
+	if h == null or h.team != human.team or h == human:
+		return
+	_call_timer = 1.5
+	h.decision_timer = minf(h.decision_timer, 0.15)
+	hud.popup("CALL!", Config.to_3d(human.pos) + Vector3(0, 2.9, 0), Color(1, 0.9, 0.3))
 
 
 func _set_human(p: Footballer) -> void:
@@ -291,7 +349,7 @@ func _switch_to_nearest() -> void:
 
 
 func _auto_switch() -> void:
-	if _switch_cooldown > 0.0 or (ball.holder != null and ball.holder.team == 0):
+	if mode == Mode.SOLO or _switch_cooldown > 0.0 or (ball.holder != null and ball.holder.team == 0):
 		return
 	if ball.intended_receiver != null and ball.intended_receiver.team == 0:
 		return
@@ -311,7 +369,13 @@ func _update_camera(real: float) -> void:
 	var target_look: Vector3
 	var fov := 42.0
 	var follow := 4.0
-	if vision.active:
+	if state == State.MENU:
+		var a := _clock * 0.12
+		target_pos = Vector3(sin(a) * 34.0, 11.0, cos(a) * 30.0)
+		target_look = Vector3(0, 1.0, 0)
+		fov = 50.0
+		follow = 2.0
+	elif vision.active:
 		target_pos = Vector3(0, 52, 26)
 		target_look = Vector3(0, 0, 1.5)
 		fov = 48.0
@@ -328,7 +392,7 @@ func _update_camera(real: float) -> void:
 	elif state == State.GOAL and _celebrant != null:
 		var c := Config.to_3d(_celebrant.pos)
 		var a := _clock * 0.7
-		target_pos = c + Vector3(cos(a) * 6.5, 2.6, sin(a) * 6.5)
+		target_pos = c + Vector3(cos(a) * 7.5, 3.2, sin(a) * 7.5)
 		target_look = c + Vector3(0, 1.2, 0)
 		fov = 50.0
 	else:
@@ -451,6 +515,12 @@ func _ai_carry(p: Footballer) -> void:
 
 	if p.decision_timer <= 0.0:
 		p.decision_timer = randf_range(0.25, 0.45)
+		if _call_timer > 0.0 and p.team == human.team and mode == Mode.SOLO:
+			var d := p.pos.distance_to(human.pos)
+			if d > PASS_MIN and d < PASS_MAX and (lane_clearance(p.pos, human.pos, 1 - p.team) > 25.0 or randf() < 0.4):
+				_call_timer = 0.0
+				pass_to(p, human)
+				return
 		if p.role == Footballer.GK:
 			var outlet := best_pass_target(p, Vector2(dir, 0))
 			if outlet != null:
@@ -525,6 +595,8 @@ func best_pass_target(from: Footballer, aim: Vector2) -> Footballer:
 			continue
 		var align := aim_n.dot(to / d)
 		var s := pass_score(from, mate) + align * 2.0
+		if mode == Mode.SOLO and mate == human and not autopilot:
+			s += 0.6
 		if align < -0.2:
 			s -= 3.0
 		if s > best_score:
@@ -549,7 +621,8 @@ func pass_to(from: Footballer, to: Footballer) -> void:
 	from.facing = offset / d
 	from.play_kick()
 	ball.kick(offset / d * spd, lift, from, to)
-	if from.team == 0:
+	FX.kick(self, Config.to_3d(from.pos + from.facing * 25.0, 10.0), Color(1, 0.97, 0.8), 0.9)
+	if from.team == 0 and mode == Mode.TEAM:
 		_set_human(to)
 
 
@@ -562,6 +635,7 @@ func shoot(p: Footballer, aim: float) -> void:
 	p.facing = v.normalized()
 	p.play_kick()
 	ball.kick(v, randf_range(40.0, 200.0) * minf(p.pos.distance_to(target) / 600.0, 1.0), p)
+	FX.kick(self, Config.to_3d(p.pos + p.facing * 25.0, 10.0), Config.TEAM_COLORS[p.team].lightened(0.5), 2.2)
 	_shake = 6.0
 	stats["shots"][p.team] += 1
 	hud.show_banner("SHOOT!", Config.TEAM_COLORS[p.team], 0.55, 0.55)
@@ -621,18 +695,26 @@ func _handle_ball_contacts() -> void:
 			if randf() < chance:
 				ball.holder = p
 				h.stun = 0.45
+				FX.grass(self, Config.to_3d(ball.pos), 10)
 				break
 
 
 func _check_possession_change() -> void:
 	if ball.holder == _last_holder:
 		return
+	var previous := _last_holder
 	_last_holder = ball.holder
 	if ball.holder == null:
 		return
 	var h := ball.holder
 	h.decision_timer = 0.8 if h.role == Footballer.GK else randf_range(0.25, 0.45)
-	if h.team == 0:
+	_call_timer = 0.0
+	if h == human and previous == null and ball.last_kicker != null and state == State.PLAYING:
+		if ball.last_kicker.team != human.team:
+			coach.on_interception()
+		elif mode == Mode.SOLO and ball.last_kicker != human:
+			coach.on_received_pass()
+	if h.team == 0 and mode == Mode.TEAM:
 		_set_human(h)
 
 

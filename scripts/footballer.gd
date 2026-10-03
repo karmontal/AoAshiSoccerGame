@@ -36,7 +36,10 @@ func _ready() -> void:
 	model = PlayerModel.new()
 	add_child(model)
 	var shirt: Color = Config.KEEPER_COLORS[team] if role == GK else Config.TEAM_COLORS[team]
-	model.build(shirt, Config.SHORTS_COLORS[team], Config.SOCK_COLORS[team], number, team * 5 + number)
+	var accent: Color = Config.ACCENT_COLORS[team]
+	if role == GK:
+		accent = Color(0.95, 0.4, 0.15) if team == 0 else Color(0.2, 0.3, 0.9)
+	model.build(shirt, Config.SHORTS_COLORS[team], Config.SOCK_COLORS[team], number, team * 5 + number, accent, role == GK)
 
 	var torus := TorusMesh.new()
 	torus.inner_radius = 0.78

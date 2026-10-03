@@ -25,6 +25,8 @@ var frozen := false
 var _ignore_kicker := 0.0
 var _mesh: MeshInstance3D
 var _shadow: MeshInstance3D
+var _trail: CPUParticles3D
+var _trail_ramp: Gradient
 
 
 func _physics_process(delta: float) -> void:
@@ -72,6 +74,38 @@ func _ready() -> void:
 	_shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_shadow)
 
+	# Light trail behind fast shots and passes.
+	_trail = CPUParticles3D.new()
+	_trail.amount = 48
+	_trail.lifetime = 0.35
+	_trail.local_coords = false
+	_trail.emitting = false
+	_trail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var dot := SphereMesh.new()
+	dot.radius = VISUAL_RADIUS * 0.9
+	dot.height = VISUAL_RADIUS * 1.8
+	dot.radial_segments = 8
+	dot.rings = 4
+	_trail.mesh = dot
+	var trail_mat := StandardMaterial3D.new()
+	trail_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	trail_mat.vertex_color_use_as_albedo = true
+	trail_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	trail_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_trail.material_override = trail_mat
+	_trail_ramp = Gradient.new()
+	_trail_ramp.set_color(0, Color(1, 1, 1, 0.9))
+	_trail_ramp.set_color(1, Color(1, 1, 1, 0.0))
+	_trail.color_ramp = _trail_ramp
+	var shrink := Curve.new()
+	shrink.add_point(Vector2(0, 1))
+	shrink.add_point(Vector2(1, 0.1))
+	_trail.scale_amount_curve = shrink
+	_trail.gravity = Vector3.ZERO
+	_trail.initial_velocity_min = 0.0
+	_trail.initial_velocity_max = 0.0
+	add_child(_trail)
+
 
 func _process(delta: float) -> void:
 	position = Config.to_3d(pos)
@@ -80,6 +114,8 @@ func _process(delta: float) -> void:
 	if v3.length() > 0.05:
 		# Rolling axis is up x velocity.
 		_mesh.rotate(Vector3(v3.z, 0, -v3.x).normalized(), v3.length() * delta / VISUAL_RADIUS)
+	_trail.position = _mesh.position
+	_trail.emitting = holder == null and not frozen and velocity.length() > 850.0
 	var s := 1.0 - minf(height * Config.WORLD_SCALE / 6.0, 0.6)
 	_shadow.scale = Vector3(s, 1, s)
 
@@ -110,6 +146,10 @@ func kick(vel: Vector2, lift: float, kicker: Footballer, receiver: Footballer = 
 		height = maxf(height, 1.0)
 	last_kicker = kicker
 	intended_receiver = receiver
+	if _trail_ramp != null and kicker != null:
+		var c: Color = Config.TEAM_COLORS[kicker.team].lightened(0.45)
+		_trail_ramp.set_color(0, Color(c, 0.9))
+		_trail_ramp.set_color(1, Color(c, 0.0))
 	_ignore_kicker = 0.22
 
 

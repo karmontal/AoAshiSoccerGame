@@ -27,6 +27,7 @@ const MATCH_SECONDS := 180.0
 const TEAM_COLORS := [Color(0.14, 0.39, 0.92), Color(0.90, 0.28, 0.30)]
 const SHORTS_COLORS := [Color(0.95, 0.96, 1.0), Color(0.12, 0.12, 0.16)]
 const SOCK_COLORS := [Color(0.14, 0.39, 0.92), Color(0.95, 0.96, 1.0)]
+const ACCENT_COLORS := [Color(0.98, 0.98, 1.0), Color(0.98, 0.82, 0.2)]
 const KEEPER_COLORS := [Color(0.98, 0.78, 0.15), Color(0.30, 0.85, 0.45)]
 const TEAM_NAMES := ["AOBA", "KAZE"]
 

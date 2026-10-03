@@ -51,6 +51,10 @@ func _input(event: InputEvent) -> void:
 
 func _on_touch(event: InputEventScreenTouch) -> void:
 	if event.pressed:
+		if game.state == SoccerMatch.State.MENU or game.state == SoccerMatch.State.FULLTIME:
+			if game.handle_screen_tap(event.position):
+				get_viewport().set_input_as_handled()
+			return
 		for b in _buttons:
 			if b["index"] == -1 and event.position.distance_to(b["pos"]) < b["radius"] * 1.25:
 				b["index"] = event.index
@@ -89,6 +93,8 @@ func _process(_delta: float) -> void:
 
 
 func _draw() -> void:
+	if game.state == SoccerMatch.State.MENU or game.state == SoccerMatch.State.FULLTIME:
+		return
 	var font := ThemeDB.fallback_font
 	draw_circle(_joy_center, JOY_RADIUS, Color(1, 1, 1, 0.12))
 	draw_arc(_joy_center, JOY_RADIUS, 0, TAU, 48, Color(1, 1, 1, 0.4), 3)
@@ -102,7 +108,7 @@ func _draw() -> void:
 		var col: Color = b["color"]
 		var label: String = b["label"]
 		if b["action"] == "pass" and not has_ball:
-			label = "SWITCH"
+			label = "CALL" if game.mode == SoccerMatch.Mode.SOLO else "SWITCH"
 		var dim := 1.0
 		if b["action"] == "shoot" and not has_ball:
 			dim = 0.45

@@ -1,6 +1,13 @@
 class_name Hud
 extends Node2D
-## Screen-space overlay: scoreboard, anime cut-in banners and the full-time panel.
+## Screen-space overlay: start menu, scoreboard, Captain's Eye meter and
+## pop-ups, anime cut-in banners and the full-time panel.
+
+const GRADE_COLORS := {
+	"S": Color(1.0, 0.85, 0.2), "A": Color(0.4, 1.0, 0.5), "B": Color(0.4, 0.85, 1.0),
+	"C": Color(1.0, 0.6, 0.25), "D": Color(1.0, 0.35, 0.35),
+}
+const POPUP_TIME := 1.4
 
 var game: SoccerMatch
 var _banner_text := ""
@@ -8,6 +15,8 @@ var _banner_color := Color.WHITE
 var _banner_time := 0.0
 var _banner_duration := 0.0
 var _banner_scale := 1.0
+var _popups: Array[Dictionary] = []
+var _time := 0.0
 
 
 func show_banner(text: String, color: Color, duration: float, text_scale := 1.0) -> void:
@@ -18,17 +27,37 @@ func show_banner(text: String, color: Color, duration: float, text_scale := 1.0)
 	_banner_time = 0.0
 
 
+## Floating anime text above a point in the 3D world (e.g. "LANE CUT +15").
+func popup(text: String, world: Vector3, color := Color(0.55, 1.0, 0.6)) -> void:
+	_popups.append({"text": text, "world": world, "t": 0.0, "color": color})
+	if _popups.size() > 6:
+		_popups.pop_front()
+
+
 func _process(delta: float) -> void:
-	_banner_time += delta / maxf(Engine.time_scale, 0.01)
+	var real := delta / maxf(Engine.time_scale, 0.01)
+	_banner_time += real
+	_time += real
+	for p in _popups:
+		p["t"] += real
+	_popups = _popups.filter(func(p: Dictionary) -> bool: return p["t"] < POPUP_TIME)
 	queue_redraw()
 
 
 func _draw() -> void:
 	var vs := get_viewport_rect().size
 	var font := ThemeDB.fallback_font
+	if game.state == SoccerMatch.State.MENU:
+		_draw_menu(vs, font)
+		return
 	if game.cinematic_active():
 		_draw_focus_lines(vs)
+	var fulltime := game.state == SoccerMatch.State.FULLTIME
+	if not fulltime:
+		_draw_popups(font)
 	_draw_scoreboard(vs, font)
+	if not fulltime:
+		_draw_eye_meter(font)
 	draw_string(font, Vector2(12, 26), "%d FPS" % Engine.get_frames_per_second(), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1, 0.6))
 	if game.vision.active:
 		_text(font, Vector2(0, vs.y - 28), "VISION  -  tap a teammate to pass", 22, Color(0.6, 0.9, 1.0), vs.x)
@@ -111,8 +140,104 @@ func _draw_focus_lines(vs: Vector2) -> void:
 
 
 func _draw_fulltime(vs: Vector2, font: Font) -> void:
-	draw_rect(Rect2(Vector2.ZERO, vs), Color(0, 0, 0, 0.55))
-	_text(font, Vector2(0, vs.y * 0.36), "FULL TIME", 84, Color.WHITE, vs.x)
+	draw_rect(Rect2(Vector2.ZERO, vs), Color(0, 0, 0, 0.6))
+	_text(font, Vector2(0, vs.y * 0.24), "FULL TIME", 76, Color.WHITE, vs.x)
 	var line := "%s  %d - %d  %s" % [Config.TEAM_NAMES[0], game.score[0], game.score[1], Config.TEAM_NAMES[1]]
-	_text(font, Vector2(0, vs.y * 0.52), line, 48, Color(1, 0.9, 0.3), vs.x)
-	_text(font, Vector2(0, vs.y * 0.68), "Tap to play again", 30, Color(0.8, 0.9, 1.0), vs.x)
+	_text(font, Vector2(0, vs.y * 0.37), line, 42, Color(1, 0.9, 0.3), vs.x)
+
+	var coach := game.coach
+	var g := coach.grade()
+	_text(font, Vector2(0, vs.y * 0.5), "CAPTAIN'S EYE", 26, Color(0.7, 0.9, 1.0), vs.x)
+	_text(font, Vector2(0, vs.y * 0.63), "%s   %d pts" % [g, coach.points], 56, GRADE_COLORS[g], vs.x)
+	var parts := PackedStringArray()
+	for id: String in ["open_lane", "run_behind", "free_space", "lane_cut", "goal_side", "tight_mark", "intercept", "received"]:
+		if coach.counts.get(id, 0) > 0:
+			parts.append("%s x%d" % [PositioningCoach.EVENTS[id][0].trim_suffix("!"), coach.counts[id]])
+	if parts.is_empty():
+		parts.append("Move into space and cut lanes to earn points")
+	_text(font, Vector2(0, vs.y * 0.73), "  |  ".join(parts), 20, Color(0.85, 0.9, 1.0), vs.x)
+	_text(font, Vector2(0, vs.y * 0.86), "Tap to continue", 28, Color(0.8, 0.9, 1.0), vs.x)
+
+
+func _draw_popups(font: Font) -> void:
+	var cam := game.camera
+	for p in _popups:
+		var world: Vector3 = p["world"]
+		if cam.is_position_behind(world):
+			continue
+		var t: float = p["t"]
+		var pos := cam.unproject_position(world) + Vector2(0, -t * 45.0)
+		var punch := 1.0 + 0.5 * maxf(0.0, 1.0 - t * 7.0)
+		var size := int(26 * punch)
+		var alpha := clampf((POPUP_TIME - t) / 0.4, 0.0, 1.0)
+		var col: Color = p["color"]
+		var text: String = p["text"]
+		var w := 400.0
+		draw_string_outline(font, pos + Vector2(-w / 2 + 3, 3), text, HORIZONTAL_ALIGNMENT_CENTER, w, size, 9, Color(Config.INK, alpha))
+		draw_string_outline(font, pos + Vector2(-w / 2, 0), text, HORIZONTAL_ALIGNMENT_CENTER, w, size, 6, Color(Config.INK, alpha))
+		draw_string(font, pos + Vector2(-w / 2, 0), text, HORIZONTAL_ALIGNMENT_CENTER, w, size, Color(col, alpha))
+
+
+## Live positioning grade (top-left).
+func _draw_eye_meter(font: Font) -> void:
+	var coach := game.coach
+	var g := coach.live_grade()
+	var col: Color = GRADE_COLORS[g]
+	var box := Rect2(12, 40, 170, 64)
+	draw_rect(box, Color(0.03, 0.04, 0.10, 0.75))
+	draw_rect(box, Color(col, 0.9), false, 2)
+	draw_string(font, box.position + Vector2(10, 20), "CAPTAIN'S EYE", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.75, 0.9, 1.0))
+	draw_string(font, box.position + Vector2(10, 46), "%d pts" % coach.points, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
+	draw_string_outline(font, box.position + Vector2(118, 52), g, HORIZONTAL_ALIGNMENT_CENTER, 40, 40, 6, Config.INK)
+	draw_string(font, box.position + Vector2(118, 52), g, HORIZONTAL_ALIGNMENT_CENTER, 40, 40, col)
+	var bar := Rect2(box.position.x + 10, box.end.y - 12, 100, 6)
+	draw_rect(bar, Color(1, 1, 1, 0.15))
+	draw_rect(Rect2(bar.position, Vector2(bar.size.x * coach.rating, bar.size.y)), col)
+
+
+func _menu_rects(vs: Vector2) -> Array[Rect2]:
+	var w := minf(360.0, vs.x * 0.36)
+	var h := 150.0
+	var y := vs.y * 0.56
+	return [Rect2(vs.x / 2 - w - 20, y, w, h), Rect2(vs.x / 2 + 20, y, w, h)]
+
+
+## Which menu button (SoccerMatch.Mode) is under the screen position, or -1.
+func menu_choice(screen_pos: Vector2) -> int:
+	var rects := _menu_rects(get_viewport_rect().size)
+	for i in rects.size():
+		if rects[i].grow(12).has_point(screen_pos):
+			return i
+	return -1
+
+
+func _draw_menu(vs: Vector2, font: Font) -> void:
+	draw_rect(Rect2(0, vs.y * 0.45, vs.x, vs.y * 0.55), Color(0.02, 0.03, 0.08, 0.55))
+	# Title on a slanted anime band.
+	var cy := vs.y * 0.24
+	var band := PackedVector2Array([Vector2(0, cy - 40), Vector2(vs.x, cy - 80), Vector2(vs.x, cy + 40), Vector2(0, cy + 80)])
+	draw_colored_polygon(band, Color(0, 0, 0, 0.7))
+	draw_polyline(PackedVector2Array([band[0], band[1]]), Config.TEAM_COLORS[0], 6)
+	draw_polyline(PackedVector2Array([band[3], band[2]]), Config.TEAM_COLORS[0], 6)
+	draw_string_outline(font, Vector2(6, cy + 36), "AO SOCCER", HORIZONTAL_ALIGNMENT_CENTER, vs.x, 96, 14, Config.INK)
+	draw_string_outline(font, Vector2(0, cy + 30), "AO SOCCER", HORIZONTAL_ALIGNMENT_CENTER, vs.x, 96, 10, Config.TEAM_COLORS[0])
+	draw_string(font, Vector2(0, cy + 30), "AO SOCCER", HORIZONTAL_ALIGNMENT_CENTER, vs.x, 96, Color.WHITE)
+	_text(font, Vector2(0, vs.y * 0.48), "Read the pitch. Win the space.", 26, Color(0.8, 0.9, 1.0), vs.x)
+
+	var rects := _menu_rects(vs)
+	var titles := ["TEAM", "SOLO"]
+	var lines := [
+		["Control whoever is nearest", "the ball. Classic arcade."],
+		["You are #9 for the whole match.", "Find space, CALL for the ball."],
+	]
+	var colors := [Config.TEAM_COLORS[0], Color(1.0, 0.75, 0.2)]
+	var pulse := 0.5 + 0.5 * sin(_time * 3.0)
+	for i in 2:
+		var r := rects[i]
+		var col: Color = colors[i]
+		draw_rect(r, Color(0.03, 0.05, 0.12, 0.9))
+		draw_rect(r, Color(col, 0.6 + 0.4 * pulse), false, 4)
+		draw_string_outline(font, Vector2(r.position.x, r.position.y + 54), titles[i], HORIZONTAL_ALIGNMENT_CENTER, r.size.x, 44, 8, Config.INK)
+		draw_string(font, Vector2(r.position.x, r.position.y + 54), titles[i], HORIZONTAL_ALIGNMENT_CENTER, r.size.x, 44, col)
+		for j in 2:
+			draw_string(font, Vector2(r.position.x, r.position.y + 92 + j * 26), lines[i][j], HORIZONTAL_ALIGNMENT_CENTER, r.size.x, 19, Color(0.85, 0.9, 1.0))
