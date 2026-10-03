@@ -1,44 +1,74 @@
 class_name TouchControls
 extends Node2D
-## Multi-touch controls: a floating joystick on the left half of the screen and
-## action buttons on the right. Buttons drive the same input actions the
-## keyboard uses, so gameplay code only reads `vector` and the action map.
+## Multi-touch controls: a floating joystick on one half of the screen and
+## action buttons on the other (swapped in left-handed mode), plus a pause
+## button. Buttons drive the same input actions the keyboard uses, so
+## gameplay code only reads `vector` and the action map.
 
-const JOY_RADIUS := 90.0
+const BASE_JOY_RADIUS := 90.0
 const DEADZONE := 0.15
+const BUTTON_DEFS := [
+	{"action": "shoot", "label": "SHOOT", "color": Color(0.95, 0.35, 0.3), "radius": 66.0, "offset": Vector2(130, 140)},
+	{"action": "pass", "label": "PASS", "color": Color(0.3, 0.75, 0.4), "radius": 54.0, "offset": Vector2(290, 90)},
+	{"action": "vision", "label": "VISION", "color": Color(0.3, 0.75, 1.0), "radius": 48.0, "offset": Vector2(150, 310)},
+]
+const PAUSE_RADIUS := 26.0
 
 var game: SoccerMatch
 var vector := Vector2.ZERO
 
+var _scale := 1.0
+var _left_handed := false
+var _joy_radius := BASE_JOY_RADIUS
 var _joy_index := -1
 var _joy_home := Vector2.ZERO
 var _joy_center := Vector2.ZERO
 var _joy_knob := Vector2.ZERO
+var _pause_pos := Vector2.ZERO
 var _buttons: Array[Dictionary] = []
 
 
 func _ready() -> void:
-	_buttons = [
-		{"action": "shoot", "label": "SHOOT", "color": Color(0.95, 0.35, 0.3), "radius": 66.0},
-		{"action": "pass", "label": "PASS", "color": Color(0.3, 0.75, 0.4), "radius": 54.0},
-		{"action": "vision", "label": "VISION", "color": Color(0.3, 0.75, 1.0), "radius": 48.0},
-	]
-	for b in _buttons:
+	for d: Dictionary in BUTTON_DEFS:
+		var b := d.duplicate()
 		b["index"] = -1
 		b["pos"] = Vector2.ZERO
+		_buttons.append(b)
 	get_viewport().size_changed.connect(_layout)
 	_layout()
 
 
+func apply_settings() -> void:
+	_scale = GameSettings.button_scale()
+	_left_handed = GameSettings.enabled("left_handed")
+	_layout()
+
+
+func release_all() -> void:
+	for b in _buttons:
+		if b["index"] != -1:
+			b["index"] = -1
+			Input.action_release(b["action"])
+	_release_joystick()
+
+
 func _layout() -> void:
 	var vs := get_viewport_rect().size
-	_joy_home = Vector2(180, vs.y - 170)
+	_joy_radius = BASE_JOY_RADIUS * _scale
+	var joy_x := 180.0 * _scale
+	_joy_home = Vector2(vs.x - joy_x if _left_handed else joy_x, vs.y - 170 * _scale)
 	if _joy_index == -1:
 		_joy_center = _joy_home
 		_joy_knob = _joy_home
-	_buttons[0]["pos"] = Vector2(vs.x - 130, vs.y - 140)
-	_buttons[1]["pos"] = Vector2(vs.x - 290, vs.y - 90)
-	_buttons[2]["pos"] = Vector2(vs.x - 150, vs.y - 310)
+	for b in _buttons:
+		var off: Vector2 = b["offset"] * _scale
+		b["pos"] = Vector2(off.x if _left_handed else vs.x - off.x, vs.y - off.y)
+		b["size"] = b["radius"] * _scale
+	_pause_pos = Vector2(vs.x - 44, 38)
+
+
+func _in_match() -> bool:
+	return game.state != SoccerMatch.State.MENU and game.state != SoccerMatch.State.FULLTIME
 
 
 func _input(event: InputEvent) -> void:
@@ -50,41 +80,54 @@ func _input(event: InputEvent) -> void:
 
 
 func _on_touch(event: InputEventScreenTouch) -> void:
-	if event.pressed:
-		if game.state == SoccerMatch.State.MENU or game.state == SoccerMatch.State.FULLTIME:
-			if game.handle_screen_tap(event.position):
-				get_viewport().set_input_as_handled()
-			return
-		for b in _buttons:
-			if b["index"] == -1 and event.position.distance_to(b["pos"]) < b["radius"] * 1.25:
-				b["index"] = event.index
-				Input.action_press(b["action"])
-				get_viewport().set_input_as_handled()
-				return
-		if game.handle_screen_tap(event.position):
-			get_viewport().set_input_as_handled()
-			return
-		if _joy_index == -1 and event.position.x < get_viewport_rect().size.x * 0.5:
-			_joy_index = event.index
-			_joy_center = event.position
-			_move_knob(event.position)
-			get_viewport().set_input_as_handled()
-	else:
+	if not event.pressed:
 		for b in _buttons:
 			if b["index"] == event.index:
 				b["index"] = -1
 				Input.action_release(b["action"])
 		if event.index == _joy_index:
-			_joy_index = -1
-			vector = Vector2.ZERO
-			_joy_center = _joy_home
-			_joy_knob = _joy_home
+			_release_joystick()
+		return
+
+	if game.state == SoccerMatch.State.MENU:
+		return  # Menu screens are Control nodes and handle their own input.
+	if game.state == SoccerMatch.State.FULLTIME:
+		if game.handle_screen_tap(event.position):
+			get_viewport().set_input_as_handled()
+		return
+	if event.position.distance_to(_pause_pos) < PAUSE_RADIUS * 1.6:
+		get_viewport().set_input_as_handled()
+		game.pause_game()
+		return
+	for b in _buttons:
+		if b["index"] == -1 and event.position.distance_to(b["pos"]) < b["size"] * 1.25:
+			b["index"] = event.index
+			Input.action_press(b["action"])
+			get_viewport().set_input_as_handled()
+			return
+	if game.handle_screen_tap(event.position):
+		get_viewport().set_input_as_handled()
+		return
+	var half := get_viewport_rect().size.x * 0.5
+	var on_joy_side := event.position.x > half if _left_handed else event.position.x < half
+	if _joy_index == -1 and on_joy_side:
+		_joy_index = event.index
+		_joy_center = event.position
+		_move_knob(event.position)
+		get_viewport().set_input_as_handled()
+
+
+func _release_joystick() -> void:
+	_joy_index = -1
+	vector = Vector2.ZERO
+	_joy_center = _joy_home
+	_joy_knob = _joy_home
 
 
 func _move_knob(pos: Vector2) -> void:
-	var off := (pos - _joy_center).limit_length(JOY_RADIUS)
+	var off := (pos - _joy_center).limit_length(_joy_radius)
 	_joy_knob = _joy_center + off
-	var v := off / JOY_RADIUS
+	var v := off / _joy_radius
 	vector = Vector2.ZERO if v.length() < DEADZONE else v
 
 
@@ -93,18 +136,24 @@ func _process(_delta: float) -> void:
 
 
 func _draw() -> void:
-	if game.state == SoccerMatch.State.MENU or game.state == SoccerMatch.State.FULLTIME:
+	if not _in_match():
 		return
 	var font := ThemeDB.fallback_font
-	draw_circle(_joy_center, JOY_RADIUS, Color(1, 1, 1, 0.12))
-	draw_arc(_joy_center, JOY_RADIUS, 0, TAU, 48, Color(1, 1, 1, 0.4), 3)
-	draw_circle(_joy_knob, 38, Color(1, 1, 1, 0.45))
-	draw_arc(_joy_knob, 38, 0, TAU, 32, Config.INK, 3)
+	draw_circle(_joy_center, _joy_radius, Color(1, 1, 1, 0.12))
+	draw_arc(_joy_center, _joy_radius, 0, TAU, 48, Color(1, 1, 1, 0.4), 3)
+	draw_circle(_joy_knob, 38 * _scale, Color(1, 1, 1, 0.45))
+	draw_arc(_joy_knob, 38 * _scale, 0, TAU, 32, Config.INK, 3)
+
+	# Pause button.
+	draw_circle(_pause_pos, PAUSE_RADIUS + 3, Color(Config.INK, 0.7))
+	draw_circle(_pause_pos, PAUSE_RADIUS, Color(0.15, 0.2, 0.35, 0.85))
+	for dx: float in [-6.0, 6.0]:
+		draw_rect(Rect2(_pause_pos + Vector2(dx - 3, -10), Vector2(6, 20)), Color.WHITE)
 
 	var has_ball := game.ball.holder == game.human
 	for b in _buttons:
 		var pos: Vector2 = b["pos"]
-		var radius: float = b["radius"]
+		var radius: float = b["size"]
 		var col: Color = b["color"]
 		var label: String = b["label"]
 		if b["action"] == "pass" and not has_ball:
@@ -120,5 +169,6 @@ func _draw() -> void:
 		if b["action"] == "vision":
 			var e := game.vision.energy
 			draw_arc(pos, radius + 9, -PI / 2, -PI / 2 + TAU * e, 48, Color(0.6, 0.95, 1.0), 6)
-		draw_string_outline(font, pos + Vector2(-radius, 8), label, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 20, 5, Config.INK)
-		draw_string(font, pos + Vector2(-radius, 8), label, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 20, Color(1, 1, 1, dim))
+		var fs := int(20 * _scale)
+		draw_string_outline(font, pos + Vector2(-radius, 8), label, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, fs, 5, Config.INK)
+		draw_string(font, pos + Vector2(-radius, 8), label, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, fs, Color(1, 1, 1, dim))

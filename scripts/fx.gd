@@ -5,6 +5,9 @@ extends RefCounted
 
 const BURST_SHADER := preload("res://shaders/burst.gdshader")
 
+## Particle amount multiplier from the graphics setting.
+static var quality := 1.0
+
 
 static func kick(parent: Node3D, at: Vector3, color: Color, size: float) -> void:
 	var quad := QuadMesh.new()
@@ -70,7 +73,7 @@ static func confetti(parent: Node3D, at: Vector3, team_color: Color) -> void:
 
 static func _particles(amount: int, lifetime: float) -> CPUParticles3D:
 	var p := CPUParticles3D.new()
-	p.amount = amount
+	p.amount = maxi(1, int(amount * quality))
 	p.lifetime = lifetime
 	p.one_shot = true
 	p.explosiveness = 1.0

@@ -36,6 +36,8 @@ var ball: Ball
 var vision: FieldVision
 var hud: Hud
 var controls: TouchControls
+var menus: Menus
+var stadium: Stadium
 var camera: Camera3D
 var human: Footballer
 var score := [0, 0]
@@ -64,7 +66,8 @@ var _call_timer := 0.0
 
 func _ready() -> void:
 	_register_inputs()
-	add_child(Stadium.new())
+	stadium = Stadium.new()
+	add_child(stadium)
 	for t in 2:
 		for slot: Dictionary in FORMATION:
 			var p := Footballer.new()
@@ -95,10 +98,14 @@ func _ready() -> void:
 	controls = TouchControls.new()
 	controls.game = self
 	ui.add_child(controls)
+	menus = Menus.new()
+	menus.game = self
+	ui.add_child(menus)
 
 	coach = PositioningCoach.new(self)
 	human = teams[0][4]
 	_set_human(human)
+	apply_settings()
 	_enter_menu()
 
 
@@ -123,11 +130,48 @@ func _enter_menu() -> void:
 	_last_holder = null
 
 
+## Applies the saved settings to the running game (called on every change).
+func apply_settings() -> void:
+	Engine.max_fps = 30 if GameSettings.get_value("fps_limit") == 0 else 60
+	var quality := GameSettings.graphics()
+	stadium.set_quality(quality)
+	FX.quality = [0.4, 0.7, 1.0][quality]
+	get_viewport().scaling_3d_scale = [0.7, 0.85, 1.0][quality]
+	for p: Footballer in teams[1]:
+		p.speed_mult = GameSettings.ai_speed()
+	controls.apply_settings()
+
+
+func pause_game() -> void:
+	if state == State.MENU or state == State.FULLTIME or get_tree().paused:
+		return
+	controls.release_all()
+	get_tree().paused = true
+	menus.show_page("pause")
+
+
+func resume_game() -> void:
+	get_tree().paused = false
+	menus.show_page("")
+
+
+func quit_to_menu() -> void:
+	get_tree().paused = false
+	_enter_menu()
+	menus.show_page("title")
+
+
+func vibrate(ms: int) -> void:
+	if GameSettings.enabled("vibration") and not autopilot:
+		Input.vibrate_handheld(ms)
+
+
 ## Starts a new match in the given mode (from the menu).
 func start_match(new_mode: Mode) -> void:
 	mode = new_mode
 	score = [0, 0]
-	time_left = Config.MATCH_SECONDS
+	time_left = GameSettings.match_seconds()
+	apply_settings()
 	vision.energy = 1.0
 	stats = {"shots": [0, 0], "saves": [0, 0]}
 	coach.reset()
@@ -178,6 +222,7 @@ func _on_goal(scoring_team: int) -> void:
 		scorer = nearest_to(scoring_team, ball.pos, false)
 	_celebrant = scorer
 	_celebrant.model.set_celebrating(true)
+	vibrate(180)
 	FX.confetti(self, Config.to_3d(_celebrant.pos), Config.TEAM_COLORS[scoring_team])
 	_shake = 18.0
 	hud.show_banner("GOAL!!", Config.TEAM_COLORS[scoring_team], 2.6, 1.2)
@@ -194,12 +239,10 @@ func _end_match() -> void:
 ## Returns true if the tap was consumed.
 func handle_screen_tap(screen_pos: Vector2) -> bool:
 	if state == State.MENU:
-		var choice := hud.menu_choice(screen_pos)
-		if choice >= 0:
-			start_match(choice as Mode)
-		return true
+		return false
 	if state == State.FULLTIME:
 		_enter_menu()
+		menus.show_page("modes")
 		return true
 	if not vision.active or ball.holder != human:
 		return false
@@ -225,14 +268,10 @@ func handle_screen_tap(screen_pos: Vector2) -> bool:
 func _process(delta: float) -> void:
 	var real := delta / maxf(Engine.time_scale, 0.01)
 	_clock += real
-	if state == State.MENU:
-		if Input.is_action_just_pressed("pass"):
-			start_match(Mode.TEAM)
-		elif Input.is_action_just_pressed("shoot"):
-			start_match(Mode.SOLO)
-	elif state == State.FULLTIME:
+	if state == State.FULLTIME:
 		if Input.is_action_just_pressed("pass") or Input.is_action_just_pressed("shoot"):
 			_enter_menu()
+			menus.show_page("modes")
 	elif state == State.PLAYING and not autopilot:
 		_handle_actions()
 	human.hide_marker = cinematic_active() or state == State.GOAL or state == State.MENU
@@ -400,7 +439,8 @@ func _update_camera(real: float) -> void:
 		target_look = Vector3(ball3.x, 0, ball3.z * 0.8) + lead
 		var lim := Config.HALF_L * Config.WORLD_SCALE - 7.0
 		target_look.x = clampf(target_look.x, -lim, lim)
-		target_pos = Vector3(target_look.x, 11.5, target_look.z * 0.45 + 18.5)
+		var k := GameSettings.camera_distance()
+		target_pos = Vector3(target_look.x, 11.5 * k, target_look.z * 0.45 + 18.5 * k)
 	var t := 1.0 - exp(-follow * real)
 	_cam_pos = _cam_pos.lerp(target_pos, t)
 	_cam_look = _cam_look.lerp(target_look, t)
@@ -514,7 +554,7 @@ func _ai_carry(p: Footballer) -> void:
 	var pressure := opp.pos.distance_to(p.pos) if opp != null else 9999.0
 
 	if p.decision_timer <= 0.0:
-		p.decision_timer = randf_range(0.25, 0.45)
+		p.decision_timer = randf_range(0.25, 0.45) * (GameSettings.ai_reaction() if p.team == 1 else 1.0)
 		if _call_timer > 0.0 and p.team == human.team and mode == Mode.SOLO:
 			var d := p.pos.distance_to(human.pos)
 			if d > PASS_MIN and d < PASS_MAX and (lane_clearance(p.pos, human.pos, 1 - p.team) > 25.0 or randf() < 0.4):
@@ -621,6 +661,8 @@ func pass_to(from: Footballer, to: Footballer) -> void:
 	from.facing = offset / d
 	from.play_kick()
 	ball.kick(offset / d * spd, lift, from, to)
+	if from == human:
+		vibrate(20)
 	FX.kick(self, Config.to_3d(from.pos + from.facing * 25.0, 10.0), Color(1, 0.97, 0.8), 0.9)
 	if from.team == 0 and mode == Mode.TEAM:
 		_set_human(to)
@@ -630,10 +672,14 @@ func shoot(p: Footballer, aim: float) -> void:
 	var dir := Config.attack_dir(p.team)
 	var target := Vector2(dir * (Config.HALF_L + 30.0), clampf(aim, -1.0, 1.0) * (Config.GOAL_WIDTH * 0.5 - 18.0))
 	var err := p.pos.distance_to(target) / 1000.0 * 70.0
+	if p.team == 1:
+		err *= GameSettings.ai_shot_error()
 	target.y += randf_range(-err, err)
 	var v := (target - p.pos).normalized() * SHOT_SPEED
 	p.facing = v.normalized()
 	p.play_kick()
+	if p == human:
+		vibrate(45)
 	ball.kick(v, randf_range(40.0, 200.0) * minf(p.pos.distance_to(target) / 600.0, 1.0), p)
 	FX.kick(self, Config.to_3d(p.pos + p.facing * 25.0, 10.0), Config.TEAM_COLORS[p.team].lightened(0.5), 2.2)
 	_shake = 6.0
@@ -691,10 +737,12 @@ func _handle_ball_contacts() -> void:
 			continue
 		if p.pos.distance_to(ball.pos) < Config.PLAYER_RADIUS + Config.BALL_RADIUS + 6.0:
 			p.tackle_cooldown = 0.9
-			var chance := 0.1 if h.role == Footballer.GK else 0.4
+			var chance := 0.1 if h.role == Footballer.GK else (GameSettings.ai_tackle() if p.team == 1 else 0.4)
 			if randf() < chance:
 				ball.holder = p
 				h.stun = 0.45
+				if h == human:
+					vibrate(60)
 				FX.grass(self, Config.to_3d(ball.pos), 10)
 				break
 

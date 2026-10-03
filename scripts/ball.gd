@@ -115,7 +115,7 @@ func _process(delta: float) -> void:
 		# Rolling axis is up x velocity.
 		_mesh.rotate(Vector3(v3.z, 0, -v3.x).normalized(), v3.length() * delta / VISUAL_RADIUS)
 	_trail.position = _mesh.position
-	_trail.emitting = holder == null and not frozen and velocity.length() > 850.0
+	_trail.emitting = FX.quality > 0.5 and holder == null and not frozen and velocity.length() > 850.0
 	var s := 1.0 - minf(height * Config.WORLD_SCALE / 6.0, 0.6)
 	_shadow.scale = Vector3(s, 1, s)
 

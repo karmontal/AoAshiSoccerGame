@@ -25,6 +25,8 @@ var hide_marker := false
 var tackle_cooldown := 0.0
 var stun := 0.0
 var decision_timer := 0.0
+## Difficulty multiplier on movement speed.
+var speed_mult := 1.0
 
 var model: PlayerModel
 var _ring: MeshInstance3D
@@ -68,7 +70,7 @@ func play_kick() -> void:
 func step(delta: float) -> void:
 	tackle_cooldown = maxf(tackle_cooldown - delta, 0.0)
 	decision_timer -= delta
-	var want := desired_velocity
+	var want := desired_velocity * speed_mult
 	if stun > 0.0:
 		stun -= delta
 		want = Vector2.ZERO

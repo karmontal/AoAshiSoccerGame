@@ -11,11 +11,32 @@ var calls := 0
 var last_holder: Footballer = null
 var pressed: Array[String] = []
 var modes_left: Array = [SoccerMatch.Mode.TEAM, SoccerMatch.Mode.SOLO]
+var menus_checked := false
 
 
 func _initialize() -> void:
+	GameSettings.reset_to_defaults()
 	game = load("res://scenes/main.tscn").instantiate()
 	root.add_child(game)
+
+
+## Title -> settings (every option applied) -> back -> modes -> back -> title.
+func _check_menus_and_settings() -> void:
+	var menus := game.menus
+	assert(menus.page == "title")
+	menus.open_settings("title")
+	assert(menus.page == "settings")
+	for d: Dictionary in GameSettings.DEFS:
+		for i in d["options"].size():
+			menus._change(d["key"], 1)
+	GameSettings.reset_to_defaults()
+	game.apply_settings()
+	menus.go_back()
+	assert(menus.page == "title")
+	menus.show_page("modes")
+	menus.go_back()
+	assert(menus.page == "title")
+	print("MENUS OK")
 
 
 func _process(_delta: float) -> bool:
@@ -24,15 +45,17 @@ func _process(_delta: float) -> bool:
 		Input.action_release(a)
 	pressed.clear()
 
+	if not menus_checked:
+		menus_checked = true
+		_check_menus_and_settings()
 	if game.state == SoccerMatch.State.MENU:
 		if modes_left.is_empty():
 			print("ALL MODES OK")
 			return true
 		var choice: SoccerMatch.Mode = modes_left.pop_front()
-		var rects := game.hud._menu_rects(game.hud.get_viewport_rect().size)
-		assert(game.hud.menu_choice(rects[choice].get_center()) == choice)
-		game.handle_screen_tap(rects[choice].get_center())
+		game.menus._start(choice)
 		assert(game.state == SoccerMatch.State.KICKOFF and game.mode == choice)
+		assert(game.menus.page == "")
 		frames = 0
 		possession_changes = 0
 		vision_uses = 0
@@ -50,6 +73,11 @@ func _process(_delta: float) -> bool:
 		if frames % 400 == 0 and game.vision.can_activate():
 			_press("vision")
 			vision_uses += 1
+		if frames == 900:
+			game.pause_game()
+			assert(paused and game.menus.page == "pause")
+			game.resume_game()
+			assert(not paused and game.menus.page == "")
 		if game.vision.active and frames % 10 == 0:
 			var mate: Footballer = game.teams[0][randi() % 5]
 			game.handle_screen_tap(game.camera.unproject_position(Config.to_3d(mate.pos) + Vector3(0, 1, 0)))
@@ -68,7 +96,7 @@ func _process(_delta: float) -> bool:
 			% [SoccerMatch.Mode.keys()[game.mode], frames, game.score[0], game.score[1], possession_changes,
 				vision_uses, calls, game.coach.grade(), game.coach.points, game.coach.counts])
 		game.handle_screen_tap(Vector2.ZERO)
-		assert(game.state == SoccerMatch.State.MENU)
+		assert(game.state == SoccerMatch.State.MENU and game.menus.page == "modes")
 	elif frames > 60 * 60 * 10:
 		push_error("match never finished")
 		return true

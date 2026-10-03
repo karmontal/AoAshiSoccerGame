@@ -8,6 +8,8 @@ const NET_SHADER := preload("res://shaders/net.gdshader")
 
 const S := Config.WORLD_SCALE
 
+var sun: DirectionalLight3D
+
 
 func _ready() -> void:
 	_build_environment()
@@ -38,7 +40,7 @@ func _build_environment() -> void:
 	world_env.environment = env
 	add_child(world_env)
 
-	var sun := DirectionalLight3D.new()
+	sun = DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-58, -35, 0)
 	sun.light_energy = 0.72
 	sun.shadow_enabled = true
@@ -171,6 +173,12 @@ func _build_stands() -> void:
 		stand.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		pivot.add_child(stand)
 		k += 1
+
+
+## 0 = low (no shadows), 1 = medium, 2 = high.
+func set_quality(level: int) -> void:
+	sun.shadow_enabled = level > 0
+	sun.directional_shadow_max_distance = 60.0 if level == 1 else 90.0
 
 
 static func _cylinder(radius: float, height: float) -> CylinderMesh:
