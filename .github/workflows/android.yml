@@ -88,10 +88,10 @@ jobs:
       - name: Import project
         run: ~/godot/godot --headless --path . --import
 
-      - name: Simulation test (full match)
+      - name: Simulation test (full TEAM + SOLO matches)
         run: |
           ~/godot/godot --headless --path . --fixed-fps 60 -s tests/sim_test.gd 2>&1 | tee sim.log
-          grep -q "restart OK" sim.log
+          grep -q "ALL MODES OK" sim.log
           ! grep -q "SCRIPT ERROR" sim.log
 
       - name: Export APK
