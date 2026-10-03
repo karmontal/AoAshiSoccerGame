@@ -8,6 +8,7 @@ const GK := 0
 const DEF := 1
 const MID := 2
 const FWD := 3
+const ARROW_HEIGHT := 2.15
 
 var team := 0
 var number := 1
@@ -27,6 +28,12 @@ var stun := 0.0
 var decision_timer := 0.0
 ## Difficulty multiplier on movement speed.
 var speed_mult := 1.0
+## Cached "find space" target for attacking off-ball movement.
+var space_target := Vector2.ZERO
+var space_base := Vector2.ZERO
+var space_timer := 0.0
+## While > 0 the player commits to a tackle instead of jockeying.
+var lunge := 0.0
 
 var model: PlayerModel
 var _ring: MeshInstance3D
@@ -41,11 +48,11 @@ func _ready() -> void:
 	var accent: Color = Config.ACCENT_COLORS[team]
 	if role == GK:
 		accent = Color(0.95, 0.4, 0.15) if team == 0 else Color(0.2, 0.3, 0.9)
-	model.build(shirt, Config.SHORTS_COLORS[team], Config.SOCK_COLORS[team], number, team * 5 + number, accent, role == GK)
+	model.build(shirt, Config.SHORTS_COLORS[team], Config.SOCK_COLORS[team], number, team * 11 + number, accent, role == GK)
 
 	var torus := TorusMesh.new()
-	torus.inner_radius = 0.78
-	torus.outer_radius = 0.95
+	torus.inner_radius = 0.55
+	torus.outer_radius = 0.68
 	torus.rings = 32
 	torus.ring_segments = 4
 	_ring = Toon.mesh_instance(torus, Toon.flat(Color(1, 0.88, 0.2)), Vector3(0, 0.04, 0))
@@ -54,10 +61,10 @@ func _ready() -> void:
 	add_child(_ring)
 
 	var cone := CylinderMesh.new()
-	cone.top_radius = 0.2
+	cone.top_radius = 0.16
 	cone.bottom_radius = 0.0
-	cone.height = 0.35
-	_arrow = Toon.mesh_instance(cone, Toon.material(Color(1, 0.88, 0.2), true, 0.03), Vector3(0, 2.5, 0))
+	cone.height = 0.28
+	_arrow = Toon.mesh_instance(cone, Toon.material(Color(1, 0.88, 0.2), true, 0.025), Vector3(0, ARROW_HEIGHT, 0))
 	_arrow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_arrow)
 	_sync_visual(0.0)
@@ -70,6 +77,7 @@ func play_kick() -> void:
 func step(delta: float) -> void:
 	tackle_cooldown = maxf(tackle_cooldown - delta, 0.0)
 	decision_timer -= delta
+	lunge -= delta
 	var want := desired_velocity * speed_mult
 	if stun > 0.0:
 		stun -= delta
@@ -96,4 +104,4 @@ func _sync_visual(delta: float) -> void:
 	_arrow.visible = is_human and not hide_marker
 	if is_human:
 		_ring.rotate_y(delta * 2.0)
-		_arrow.position.y = 2.5 + sin(Time.get_ticks_msec() * 0.008) * 0.08
+		_arrow.position.y = ARROW_HEIGHT + sin(Time.get_ticks_msec() * 0.008) * 0.08

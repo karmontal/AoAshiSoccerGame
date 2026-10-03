@@ -9,14 +9,23 @@ enum State { MENU, KICKOFF, PLAYING, GOAL, FULLTIME }
 ## carry the ball and you call for it.
 enum Mode { TEAM, SOLO }
 
-## 5-a-side shape in the team's own frame (attacking +x).
+## 4-3-3 in the team's own frame (attacking +x), axes normalised to the half-pitch.
 const FORMATION := [
-	{"role": Footballer.GK, "pos": Vector2(-0.93, 0.0), "num": 1},
-	{"role": Footballer.DEF, "pos": Vector2(-0.58, -0.40), "num": 2},
-	{"role": Footballer.DEF, "pos": Vector2(-0.58, 0.40), "num": 5},
-	{"role": Footballer.MID, "pos": Vector2(-0.32, 0.0), "num": 8},
-	{"role": Footballer.FWD, "pos": Vector2(-0.08, 0.0), "num": 9},
+	{"role": Footballer.GK, "pos": Vector2(-0.95, 0.0), "num": 1},
+	{"role": Footballer.DEF, "pos": Vector2(-0.64, 0.66), "num": 2},
+	{"role": Footballer.DEF, "pos": Vector2(-0.70, 0.22), "num": 5},
+	{"role": Footballer.DEF, "pos": Vector2(-0.70, -0.22), "num": 4},
+	{"role": Footballer.DEF, "pos": Vector2(-0.64, -0.66), "num": 3},
+	{"role": Footballer.MID, "pos": Vector2(-0.40, 0.36), "num": 8},
+	{"role": Footballer.MID, "pos": Vector2(-0.46, 0.0), "num": 6},
+	{"role": Footballer.MID, "pos": Vector2(-0.40, -0.36), "num": 10},
+	{"role": Footballer.FWD, "pos": Vector2(-0.14, 0.62), "num": 7},
+	{"role": Footballer.FWD, "pos": Vector2(-0.06, 0.0), "num": 9},
+	{"role": Footballer.FWD, "pos": Vector2(-0.14, -0.62), "num": 11},
 ]
+## The striker: kick-off taker and the SOLO-mode player.
+const STRIKER := 9
+const PLAYMAKER := 6
 const KEY_BINDINGS := {
 	"move_left": [KEY_A, KEY_LEFT],
 	"move_right": [KEY_D, KEY_RIGHT],
@@ -28,8 +37,10 @@ const KEY_BINDINGS := {
 }
 
 const PASS_MIN := 60.0
-const PASS_MAX := 1150.0
-const SHOT_SPEED := 1450.0
+const PASS_MAX := 55.0 * Config.M
+const SHOT_SPEED := 44.0 * Config.M
+## Time after receiving the ball before an opponent may tackle.
+const RECEIVE_GRACE := 0.35
 
 var teams: Array = [[], []]
 var ball: Ball
@@ -62,6 +73,7 @@ var _celebrant: Footballer = null
 var _cam_pos := Vector3(0, 14, 22)
 var _cam_look := Vector3.ZERO
 var _call_timer := 0.0
+var _possession_time := 0.0
 
 
 func _ready() -> void:
@@ -103,7 +115,7 @@ func _ready() -> void:
 	ui.add_child(menus)
 
 	coach = PositioningCoach.new(self)
-	human = teams[0][4]
+	human = player_by_number(0, STRIKER)
 	_set_human(human)
 	apply_settings()
 	_enter_menu()
@@ -198,13 +210,13 @@ func _start_kickoff(team_with_ball: int) -> void:
 	state = State.KICKOFF
 	_state_timer = 1.4
 	_reset_positions()
-	var taker: Footballer = teams[team_with_ball][4]
+	var taker: Footballer = player_by_number(team_with_ball, STRIKER)
 	taker.pos = Vector2(-Config.attack_dir(team_with_ball) * 30.0, 0)
 	ball.place(Vector2.ZERO)
 	ball.holder = taker
 	_last_holder = taker
 	taker.decision_timer = 0.6
-	_set_human(teams[0][4] if mode == Mode.SOLO or team_with_ball == 0 else teams[0][3])
+	_set_human(player_by_number(0, STRIKER if mode == Mode.SOLO or team_with_ball == 0 else PLAYMAKER))
 	hud.show_banner("KICK OFF", Color(1, 0.9, 0.3), 1.2, 0.8)
 
 
@@ -311,6 +323,7 @@ func _physics_process(delta: float) -> void:
 		return
 	_switch_cooldown -= delta
 	_call_timer -= delta
+	_possession_time += delta
 	if not autopilot:
 		_update_human_movement()
 	_update_ai(delta)
@@ -337,7 +350,7 @@ func _update_human_movement() -> void:
 		human.desired_velocity = v * Config.PLAYER_SPEED * mult
 	elif ball.intended_receiver == human or (ball.holder == null and human.pos.distance_to(ball.pos) < 140.0):
 		# Help the player: step towards a pass or a nearby loose ball.
-		human.desired_velocity = _steer(human, ball.pos, 1.0)
+		human.desired_velocity = _steer(human, ball.target_point(), 1.0)
 	else:
 		human.desired_velocity = Vector2.ZERO
 
@@ -370,7 +383,7 @@ func _call_for_ball() -> void:
 		return
 	_call_timer = 1.5
 	h.decision_timer = minf(h.decision_timer, 0.15)
-	hud.popup("CALL!", Config.to_3d(human.pos) + Vector3(0, 2.9, 0), Color(1, 0.9, 0.3))
+	hud.popup("CALL!", Config.to_3d(human.pos) + Vector3(0, 2.5, 0), Color(1, 0.9, 0.3))
 
 
 func _set_human(p: Footballer) -> void:
@@ -410,13 +423,13 @@ func _update_camera(real: float) -> void:
 	var follow := 4.0
 	if state == State.MENU:
 		var a := _clock * 0.12
-		target_pos = Vector3(sin(a) * 34.0, 11.0, cos(a) * 30.0)
+		target_pos = Vector3(sin(a) * 46.0, 15.0, cos(a) * 40.0)
 		target_look = Vector3(0, 1.0, 0)
 		fov = 50.0
 		follow = 2.0
 	elif vision.active:
-		target_pos = Vector3(0, 52, 26)
-		target_look = Vector3(0, 0, 1.5)
+		target_pos = Vector3(0, 68, 34)
+		target_look = Vector3(0, 0, 2.0)
 		fov = 48.0
 	elif _cine_timer > 0.0 and _cine_shooter != null:
 		var d3 := Vector3(_cine_dir.x, 0, _cine_dir.y)
@@ -440,7 +453,7 @@ func _update_camera(real: float) -> void:
 		var lim := Config.HALF_L * Config.WORLD_SCALE - 7.0
 		target_look.x = clampf(target_look.x, -lim, lim)
 		var k := GameSettings.camera_distance()
-		target_pos = Vector3(target_look.x, 11.5 * k, target_look.z * 0.45 + 18.5 * k)
+		target_pos = Vector3(target_look.x, 13.0 * k, target_look.z * 0.45 + 21.0 * k)
 	var t := 1.0 - exp(-follow * real)
 	_cam_pos = _cam_pos.lerp(target_pos, t)
 	_cam_look = _cam_look.lerp(target_look, t)
@@ -477,7 +490,7 @@ func end_cinematic() -> void:
 func _update_ai(delta: float) -> void:
 	_auto_switch()
 	var owner_team := ball.holder.team if ball.holder != null else -1
-	var predicted := ball.pos + ball.velocity * 0.35
+	var predicted := ball.target_point()
 	for t in 2:
 		var chaser: Footballer = null
 		if owner_team != t:
@@ -485,6 +498,16 @@ func _update_ai(delta: float) -> void:
 				chaser = ball.intended_receiver
 			else:
 				chaser = nearest_to(t, predicted, true)
+		# Against a pass in flight, only go for the interception if we can get
+		# there first; otherwise close down the receiver from the goal side.
+		var press_target := Vector2.INF
+		var receiver := ball.intended_receiver
+		if chaser != null and receiver != null and receiver.team != t and ball.holder == null:
+			var ours := chaser.pos.distance_to(predicted) / (Config.PLAYER_SPEED * chaser.speed_mult)
+			var theirs := receiver.pos.distance_to(predicted) / Config.PLAYER_SPEED
+			if ours > theirs * 0.8:
+				var own_goal := Vector2(-Config.attack_dir(t) * Config.HALF_L, 0)
+				press_target = predicted + (own_goal - predicted).normalized() * 2.5 * Config.M
 		for p: Footballer in teams[t]:
 			if p.is_human and not autopilot:
 				continue
@@ -494,9 +517,29 @@ func _update_ai(delta: float) -> void:
 				_ai_goalkeeper(p)
 			elif p == chaser:
 				var target := predicted if ball.holder == null else ball.pos
+				if press_target != Vector2.INF:
+					target = press_target
+				elif ball.holder != null:
+					target = _jockey_target(p)
 				p.desired_velocity = _steer(p, target, 1.0)
 			else:
-				p.desired_velocity = _steer(p, _support_position(p, owner_team == t), 0.85)
+				var spot := _support_position(p, owner_team == t)
+				if owner_team == t:
+					spot = _find_space(p, spot)
+				p.desired_velocity = _steer(p, spot, 0.85)
+
+
+## Pressing the carrier: stay goal-side at arm's length, and now and then
+## commit to a tackle.
+func _jockey_target(p: Footballer) -> Vector2:
+	var carrier := ball.holder
+	if p.lunge <= 0.0 and p.tackle_cooldown <= 0.0 and p.pos.distance_to(carrier.pos) < 3.5 * Config.M:
+		if randf() < get_physics_process_delta_time() * 1.1:
+			p.lunge = 0.5
+	if p.lunge > 0.0:
+		return ball.pos
+	var own_goal := Vector2(-Config.attack_dir(p.team) * Config.HALF_L, 0)
+	return carrier.pos + (own_goal - carrier.pos).normalized() * 2.4 * Config.M
 
 
 func _steer(p: Footballer, target: Vector2, speed_factor: float) -> Vector2:
@@ -526,9 +569,41 @@ func _support_position(p: Footballer, attacking: bool) -> Vector2:
 		_:
 			x = clampf(x, -0.45, 0.85)
 	var y := p.formation.y + (ball.pos.y / Config.HALF_W) * 0.35
-	if attacking and p.role != Footballer.DEF:
-		y += sin(_clock * 0.7 + p.number) * 0.12
 	return Vector2(x * Config.HALF_L * dir, clampf(y, -0.9, 0.9) * Config.HALF_W)
+
+
+## Attacking off-ball movement: around the formation spot, pick the nearby
+## point with the most room from opponents and an open lane to the ball.
+## Re-evaluated a few times per second per player.
+func _find_space(p: Footballer, base: Vector2) -> Vector2:
+	p.space_timer -= get_physics_process_delta_time()
+	if p.space_timer > 0.0 and p.space_base.distance_to(base) < 3.0 * Config.M:
+		return p.space_target
+	p.space_timer = randf_range(0.3, 0.5)
+	p.space_base = base
+	var opp := 1 - p.team
+	var dir := Config.attack_dir(p.team)
+	var step := 6.0 * Config.M
+	var best := base
+	var best_score := -INF
+	for ix in range(-1, 2):
+		for iy in range(-1, 2):
+			var c := base + Vector2(ix * step, iy * step)
+			c.x = clampf(c.x, -Config.HALF_L + Config.M, Config.HALF_L - Config.M)
+			c.y = clampf(c.y, -Config.HALF_W + Config.M, Config.HALF_W - Config.M)
+			var room := INF
+			for o: Footballer in teams[opp]:
+				room = minf(room, o.pos.distance_to(c))
+			var s := minf(room, 12.0 * Config.M)
+			if ball.holder != null:
+				s += minf(lane_clearance(ball.holder.pos, c, opp), 4.0 * Config.M) * 0.8
+			s += (c.x - base.x) * dir * 0.15
+			s -= c.distance_to(base) * 0.1
+			if s > best_score:
+				best_score = s
+				best = c
+	p.space_target = best
+	return best
 
 
 func _ai_goalkeeper(p: Footballer) -> void:
@@ -566,24 +641,27 @@ func _ai_carry(p: Footballer) -> void:
 			if outlet != null:
 				pass_to(p, outlet)
 				return
-		if dist_goal < 430.0 and absf(p.pos.y) < 380.0 and (pressure > 60.0 or randf() < 0.5):
-			shoot(p, randf_range(-0.85, 0.85))
+		var shot_range := 30.0 * Config.M
+		if dist_goal < shot_range and absf(p.pos.y) < 20.0 * Config.M:
+			var keen := 1.0 if dist_goal < 18.0 * Config.M else 0.35
+			if (pressure > 2.5 * Config.M or randf() < 0.5) and randf() < keen:
+				shoot(p, randf_range(-0.85, 0.85))
+				return
+		var best := best_pass_target(p, Vector2(dir, 0))
+		var gain := (best.pos.x - p.pos.x) * dir if best != null else -INF
+		if best != null and gain > 8.0 * Config.M and randf() < 0.35:
+			pass_to(p, best)
 			return
-		if pressure < 90.0:
-			var best := best_pass_target(p, Vector2(dir, 0))
-			if best != null and randf() < 0.75:
-				pass_to(p, best)
-				return
-		elif randf() < 0.15:
-			var forward := best_pass_target(p, Vector2(dir, 0))
-			if forward != null and (forward.pos.x - p.pos.x) * dir > 150.0:
-				pass_to(p, forward)
-				return
+		if pressure < 1.8 * Config.M and best != null and randf() < 0.6:
+			pass_to(p, best)
+			return
 
+	# Dribble at goal, veering away from the nearest opponent; with room ahead, go faster.
 	var want := (goal - p.pos).normalized()
-	if opp != null and pressure < 150.0:
+	if opp != null and pressure < 6.0 * Config.M:
 		want = (want + (p.pos - opp.pos).normalized() * 0.8).normalized()
-	p.desired_velocity = want * Config.PLAYER_SPEED * Config.DRIBBLE_SPEED_MULT
+	var mult := 1.0 if pressure > 6.0 * Config.M else Config.DRIBBLE_SPEED_MULT
+	p.desired_velocity = want * Config.PLAYER_SPEED * mult
 
 
 # --- Passing, shooting, possession -----------------------------------------
@@ -613,7 +691,7 @@ func lane_clearance(a: Vector2, b: Vector2, opponent_team: int) -> float:
 func pass_score(from: Footballer, mate: Footballer) -> float:
 	var dir := Config.attack_dir(from.team)
 	var s := clampf(lane_clearance(from.pos, mate.pos, 1 - from.team) / 80.0, 0.0, 1.5)
-	s += (mate.pos.x - from.pos.x) * dir / 600.0
+	s += (mate.pos.x - from.pos.x) * dir / 400.0
 	s -= absf(from.pos.distance_to(mate.pos) - 320.0) / 700.0
 	var marker := nearest_to(1 - from.team, mate.pos, false)
 	if marker != null:
@@ -652,10 +730,10 @@ func pass_to(from: Footballer, to: Footballer) -> void:
 	if d < 1.0:
 		return
 	var lift := 0.0
-	var spd := clampf(d * Ball.GROUND_DAMP + 250.0, 420.0, 1300.0)
-	if lane_clearance(from.pos, lead, 1 - from.team) < 30.0 and d > 220.0:
+	var spd := clampf(d * Ball.GROUND_DAMP + 20.0 * Config.M, 22.0 * Config.M, 60.0 * Config.M)
+	if lane_clearance(from.pos, lead, 1 - from.team) < 30.0 and d > 9.0 * Config.M:
 		# Lane is blocked: chip it over. Airtime T = 2 * lift / g.
-		lift = clampf(d * 0.75, 260.0, 520.0)
+		lift = clampf(d * 0.3, 7.0 * Config.M, 11.0 * Config.M)
 		var airtime := 2.0 * lift / Ball.GRAVITY
 		spd = d / airtime * (1.0 + Ball.AIR_DAMP * airtime * 0.5) * 0.9
 	from.facing = offset / d
@@ -663,7 +741,7 @@ func pass_to(from: Footballer, to: Footballer) -> void:
 	ball.kick(offset / d * spd, lift, from, to)
 	if from == human:
 		vibrate(20)
-	FX.kick(self, Config.to_3d(from.pos + from.facing * 25.0, 10.0), Color(1, 0.97, 0.8), 0.9)
+	FX.kick(self, Config.to_3d(from.pos + from.facing * 16.0, 5.0), Color(1, 0.97, 0.8), 0.6)
 	if from.team == 0 and mode == Mode.TEAM:
 		_set_human(to)
 
@@ -681,7 +759,7 @@ func shoot(p: Footballer, aim: float) -> void:
 	if p == human:
 		vibrate(45)
 	ball.kick(v, randf_range(40.0, 200.0) * minf(p.pos.distance_to(target) / 600.0, 1.0), p)
-	FX.kick(self, Config.to_3d(p.pos + p.facing * 25.0, 10.0), Config.TEAM_COLORS[p.team].lightened(0.5), 2.2)
+	FX.kick(self, Config.to_3d(p.pos + p.facing * 16.0, 5.0), Config.TEAM_COLORS[p.team].lightened(0.5), 1.5)
 	_shake = 6.0
 	stats["shots"][p.team] += 1
 	hud.show_banner("SHOOT!", Config.TEAM_COLORS[p.team], 0.55, 0.55)
@@ -721,7 +799,7 @@ func _handle_ball_contacts() -> void:
 					best_d = d
 		if best == null:
 			return
-		var fast := ball.velocity.length() > 900.0
+		var fast := ball.velocity.length() > 45.0 * Config.M
 		if fast and best != ball.intended_receiver and best.role != Footballer.GK and randf() < 0.5:
 			ball.deflect(best)
 		else:
@@ -733,7 +811,7 @@ func _handle_ball_contacts() -> void:
 
 	var h := ball.holder
 	for p: Footballer in teams[1 - h.team]:
-		if p.tackle_cooldown > 0.0 or p.stun > 0.0:
+		if p.tackle_cooldown > 0.0 or p.stun > 0.0 or _possession_time < RECEIVE_GRACE:
 			continue
 		if p.pos.distance_to(ball.pos) < Config.PLAYER_RADIUS + Config.BALL_RADIUS + 6.0:
 			p.tackle_cooldown = 0.9
@@ -752,6 +830,7 @@ func _check_possession_change() -> void:
 		return
 	var previous := _last_holder
 	_last_holder = ball.holder
+	_possession_time = 0.0
 	if ball.holder == null:
 		return
 	var h := ball.holder
@@ -764,6 +843,13 @@ func _check_possession_change() -> void:
 			coach.on_received_pass()
 	if h.team == 0 and mode == Mode.TEAM:
 		_set_human(h)
+
+
+func player_by_number(team: int, number: int) -> Footballer:
+	for p: Footballer in teams[team]:
+		if p.number == number:
+			return p
+	return teams[team][0]
 
 
 static func formation_to_world(team: int, f: Vector2) -> Vector2:

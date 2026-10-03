@@ -11,6 +11,7 @@ const HAIR_COLORS := [
 ]
 const KICK_TIME := 0.32
 const HEAD_RADIUS := 0.2
+const MODEL_SCALE := 0.86
 
 ## Hair styles: each spike is [anchor direction on the head, pointing direction, length].
 const HAIR_STYLES := [
@@ -55,6 +56,8 @@ func build(shirt: Color, shorts: Color, socks: Color, number: int, variant: int,
 
 	_body = Node3D.new()
 	add_child(_body)
+	# Modelled ~2 m tall with anime proportions; scale to a real ~1.78 m.
+	scale = Vector3.ONE * MODEL_SCALE
 
 	# Legs: hip -> thigh -> knee -> shin -> boot.
 	_leg_l = _pivot(_body, Vector3(-0.12, 0.95, 0))
@@ -256,8 +259,8 @@ static func _capsule(radius: float, height: float) -> CapsuleMesh:
 	var m := CapsuleMesh.new()
 	m.radius = radius
 	m.height = height
-	m.radial_segments = 12
-	m.rings = 4
+	m.radial_segments = 8
+	m.rings = 2
 	return m
 
 
@@ -265,8 +268,8 @@ static func _sphere(radius: float) -> SphereMesh:
 	var m := SphereMesh.new()
 	m.radius = radius
 	m.height = radius * 2
-	m.radial_segments = 16
-	m.rings = 8
+	m.radial_segments = 10
+	m.rings = 5
 	return m
 
 
@@ -275,7 +278,7 @@ static func _cylinder(top: float, bottom: float, height: float) -> CylinderMesh:
 	m.top_radius = top
 	m.bottom_radius = bottom
 	m.height = height
-	m.radial_segments = 12
+	m.radial_segments = 8
 	m.rings = 1
 	return m
 

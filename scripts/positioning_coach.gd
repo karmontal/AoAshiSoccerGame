@@ -178,7 +178,7 @@ func _event(id: String, me: Footballer, force := false) -> void:
 	points += pts
 	counts[id] += 1
 	game.vision.energy = minf(1.0, game.vision.energy + pts * VISION_PER_POINT)
-	game.hud.popup("%s +%d" % [label, pts], Config.to_3d(me.pos, 0.0) + Vector3(0, 2.9, 0))
+	game.hud.popup("%s +%d" % [label, pts], Config.to_3d(me.pos, 0.0) + Vector3(0, 2.5, 0))
 
 
 func _nearest_teammate(me: Footballer) -> Footballer:

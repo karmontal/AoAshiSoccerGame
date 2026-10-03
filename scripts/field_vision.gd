@@ -11,6 +11,7 @@ const SLOW_SCALE := 0.18
 const DRAIN_PER_SEC := 0.30
 const RECHARGE_PER_SEC := 0.07
 const MIN_ENERGY := 0.25
+const MAX_LANES := 5
 
 const OPEN := Color(0.35, 1.0, 0.55)
 const RISKY := Color(1.0, 0.85, 0.25)
@@ -64,6 +65,19 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 
+## With eleven players, only the most useful passing options are drawn.
+func _top_options(carrier: Footballer, best: Footballer) -> Array[Footballer]:
+	var scored: Array = []
+	for mate: Footballer in game.teams[carrier.team]:
+		if mate != carrier and mate.role != Footballer.GK:
+			scored.append([game.pass_score(carrier, mate) + (10.0 if mate == best else 0.0), mate])
+	scored.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
+	var result: Array[Footballer] = []
+	for entry: Array in scored.slice(0, MAX_LANES):
+		result.append(entry[1])
+	return result
+
+
 static func lane_color(clearance: float) -> Color:
 	if clearance > 60.0:
 		return OPEN
@@ -98,9 +112,7 @@ func _draw() -> void:
 		draw_arc(to_screen(o.pos), 16, 0, TAU, 24, Color(1, 0.3, 0.3, 0.8), 2.5)
 
 	var best: Footballer = game.best_pass_target(carrier, carrier.facing)
-	for mate: Footballer in game.teams[carrier.team]:
-		if mate == carrier:
-			continue
+	for mate: Footballer in _top_options(carrier, best):
 		var col := lane_color(game.lane_clearance(carrier.pos, mate.pos, 1 - carrier.team))
 		if carrier.team != 0:
 			col = col.lerp(Color(1, 0.4, 0.2), 0.5)

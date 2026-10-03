@@ -44,7 +44,7 @@ func _build_environment() -> void:
 	sun.rotation_degrees = Vector3(-58, -35, 0)
 	sun.light_energy = 0.72
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 90.0
+	sun.directional_shadow_max_distance = 110.0
 	add_child(sun)
 
 
@@ -59,8 +59,8 @@ func _build_pitch() -> void:
 	mat.set_shader_parameter("small_box_depth", Config.SMALL_BOX_DEPTH * S)
 	mat.set_shader_parameter("small_box_half_width", Config.SMALL_BOX_WIDTH * 0.5 * S)
 	mat.set_shader_parameter("center_radius", Config.CENTER_CIRCLE * S)
-	mat.set_shader_parameter("spot_distance", 220.0 * S)
-	mat.set_shader_parameter("arc_radius", 150.0 * S)
+	mat.set_shader_parameter("spot_distance", Config.PENALTY_SPOT * S)
+	mat.set_shader_parameter("arc_radius", Config.PENALTY_ARC * S)
 	var ground := Toon.mesh_instance(plane, mat)
 	ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(ground)
@@ -72,7 +72,7 @@ func _build_goal(side: float) -> void:
 	var h := Ball.CROSSBAR * S
 	var depth := Config.GOAL_DEPTH * S
 	var white := Toon.material(Color(0.97, 0.97, 1.0), true, 0.03)
-	var bar := 0.1
+	var bar := 0.06
 
 	for z: float in [-half_w, half_w]:
 		add_child(Toon.mesh_instance(_cylinder(bar, h), white, Vector3(x, h / 2, z)))
@@ -178,7 +178,7 @@ func _build_stands() -> void:
 ## 0 = low (no shadows), 1 = medium, 2 = high.
 func set_quality(level: int) -> void:
 	sun.shadow_enabled = level > 0
-	sun.directional_shadow_max_distance = 60.0 if level == 1 else 90.0
+	sun.directional_shadow_max_distance = 70.0 if level == 1 else 110.0
 
 
 static func _cylinder(radius: float, height: float) -> CylinderMesh:

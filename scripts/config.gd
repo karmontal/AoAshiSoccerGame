@@ -4,22 +4,30 @@ extends RefCounted
 ## pitch centred on (0, 0); WORLD_SCALE converts to metres in the 3D scene,
 ## where logic y maps to world z.
 
-const PITCH_LENGTH := 2000.0
-const PITCH_WIDTH := 1240.0
+## Logic units per metre (the inverse of WORLD_SCALE). Dimensions below are
+## real 11-a-side values written in metres.
+const M := 25.0
+
+const PITCH_LENGTH := 105.0 * M
+const PITCH_WIDTH := 68.0 * M
 const HALF_L := PITCH_LENGTH / 2.0
 const HALF_W := PITCH_WIDTH / 2.0
-const GOAL_WIDTH := 230.0
-const GOAL_DEPTH := 55.0
-const BOX_DEPTH := 330.0
-const BOX_WIDTH := 700.0
-const SMALL_BOX_DEPTH := 110.0
-const SMALL_BOX_WIDTH := 380.0
-const CENTER_CIRCLE := 170.0
+const GOAL_WIDTH := 7.32 * M
+const GOAL_HEIGHT := 2.44 * M
+const GOAL_DEPTH := 2.0 * M
+const BOX_DEPTH := 16.5 * M
+const BOX_WIDTH := 40.32 * M
+const SMALL_BOX_DEPTH := 5.5 * M
+const SMALL_BOX_WIDTH := 18.32 * M
+const CENTER_CIRCLE := 9.15 * M
+const PENALTY_SPOT := 11.0 * M
+const PENALTY_ARC := 9.15 * M
 
-const PLAYER_RADIUS := 18.0
-const BALL_RADIUS := 9.0
-const PLAYER_SPEED := 240.0
-const PLAYER_ACCEL := 1500.0
+## Collision radius around a player's feet, and the real ball radius.
+const PLAYER_RADIUS := 0.45 * M
+const BALL_RADIUS := 0.11 * M
+const PLAYER_SPEED := 8.0 * M
+const PLAYER_ACCEL := 55.0 * M
 const DRIBBLE_SPEED_MULT := 0.88
 
 const MATCH_SECONDS := 180.0

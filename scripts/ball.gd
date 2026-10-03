@@ -6,12 +6,15 @@ extends Node3D
 
 signal goal_scored(scoring_team: int)
 
-const GRAVITY := 980.0
+## Somewhat heavier than real gravity so lofted balls stay snappy.
+const GRAVITY := 16.0 * Config.M
 const GROUND_DAMP := 1.25
 const AIR_DAMP := 0.35
-const CROSSBAR := 70.0
-const CONTROL_HEIGHT := 32.0
-const VISUAL_RADIUS := 0.3
+const CROSSBAR := Config.GOAL_HEIGHT
+## Players can bring the ball down up to chest height.
+const CONTROL_HEIGHT := 1.7 * Config.M
+## Slightly larger than a real ball (0.11 m) so it reads on a phone screen.
+const VISUAL_RADIUS := 0.14
 const BALL_SHADER := preload("res://shaders/ball.gdshader")
 
 var pos := Vector2.ZERO
@@ -44,7 +47,8 @@ func _physics_process(delta: float) -> void:
 			height += vz * delta
 			if height <= 0.0:
 				height = 0.0
-				vz = -vz * 0.4 if absf(vz) > 150.0 else 0.0
+				vz = -vz * 0.35 if absf(vz) > 4.0 * Config.M else 0.0
+				velocity *= 0.8
 			velocity *= exp(-AIR_DAMP * delta)
 		else:
 			velocity *= exp(-GROUND_DAMP * delta)
@@ -62,7 +66,7 @@ func _ready() -> void:
 	sphere.rings = 12
 	var mat := ShaderMaterial.new()
 	mat.shader = BALL_SHADER
-	mat.next_pass = Toon.outline_material(0.025)
+	mat.next_pass = Toon.outline_material(0.012)
 	_mesh = Toon.mesh_instance(sphere, mat)
 	add_child(_mesh)
 
@@ -159,6 +163,15 @@ func deflect(by: Footballer) -> void:
 	last_kicker = by
 	intended_receiver = null
 	_ignore_kicker = 0.25
+
+
+## Where the ball will be worth running to: its landing spot while airborne,
+## a little ahead of it while rolling.
+func target_point() -> Vector2:
+	if height <= 0.0 and vz <= 0.0:
+		return pos + velocity * 0.35
+	var t := (vz + sqrt(vz * vz + 2.0 * GRAVITY * height)) / GRAVITY
+	return pos + velocity * t * exp(-AIR_DAMP * t * 0.5)
 
 
 func can_be_taken_by(p: Footballer) -> bool:

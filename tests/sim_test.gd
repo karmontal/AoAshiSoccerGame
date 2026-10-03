@@ -79,7 +79,7 @@ func _process(_delta: float) -> bool:
 			game.resume_game()
 			assert(not paused and game.menus.page == "")
 		if game.vision.active and frames % 10 == 0:
-			var mate: Footballer = game.teams[0][randi() % 5]
+			var mate: Footballer = game.teams[0].pick_random()
 			game.handle_screen_tap(game.camera.unproject_position(Config.to_3d(mate.pos) + Vector3(0, 1, 0)))
 
 	if game.ball.holder != last_holder:
@@ -88,7 +88,7 @@ func _process(_delta: float) -> bool:
 	assert(game.human != null and game.human.is_human)
 	assert(game.human.team == 0)
 	if game.mode == SoccerMatch.Mode.SOLO:
-		assert(game.human == game.teams[0][4], "SOLO mode must keep control of #9")
+		assert(game.human.number == SoccerMatch.STRIKER, "SOLO mode must keep control of #9")
 	assert(not is_nan(game.ball.pos.x))
 
 	if game.state == SoccerMatch.State.FULLTIME:
