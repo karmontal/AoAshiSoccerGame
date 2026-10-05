@@ -32,9 +32,11 @@ func _process(delta: float) -> bool:
 				phase = "wait_start"
 		"wait_start":
 			if game.is_client and game.state != SoccerMatch.State.MENU:
-				if game.human.number != 10 or game.net.my_slot != 1:
-					push_error("client should control #10 as P2")
+				var slot := game.net.my_slot
+				if slot < 1 or slot >= NetCoop.SLOTS.size() or game.human.number != NetCoop.SLOTS[slot]:
+					push_error("client should control the attacker of its slot")
 					return true
+				print("CLIENT: playing as P%d #%d" % [slot + 1, game.human.number])
 				phase = "settle"
 				t = 0.0
 		"settle":
@@ -50,7 +52,7 @@ func _process(delta: float) -> bool:
 			if t > 2.0:
 				game.controls.vector = Vector2.ZERO
 				var moved := (game.human.pos - start_pos).dot(drive)
-				print("CLIENT: #10 moved %.1f m towards the centre (state %d)" % [moved / Config.M, game.state])
+				print("CLIENT: #%d moved %.1f m towards the centre (state %d)" % [game.human.number, moved / Config.M, game.state])
 				if moved < 5.0 * Config.M:
 					push_error("host should move the client's player")
 					return true
