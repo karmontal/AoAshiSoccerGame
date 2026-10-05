@@ -13,6 +13,8 @@ var pressed: Array[String] = []
 ## action -> frame to release a held button.
 var held := {}
 var set_pieces := 0
+var forced_foul := false
+var forced_penalty := false
 var modes_left: Array = [SoccerMatch.Mode.TEAM, SoccerMatch.Mode.SOLO]
 var menus_checked := false
 
@@ -90,12 +92,15 @@ func _process(_delta: float) -> bool:
 			_hold("pass", 25)
 		if frames % 61 == 0:
 			_press("special")
-		if frames == 1500:
-			# Force a foul in midfield, then a penalty.
+		# Force a foul in midfield, then a penalty, at the first live moment
+		# after these frames (a goal or a natural foul may be in progress).
+		if frames >= 1500 and not forced_foul:
+			forced_foul = true
 			game._foul(game.teams[1][6], game.teams[0][9])
 			assert(game.state == SoccerMatch.State.SET_PIECE)
 			set_pieces += 1
-		if frames == 2600:
+		elif frames >= 2600 and not forced_penalty:
+			forced_penalty = true
 			var victim: Footballer = game.teams[0][9]
 			victim.pos = Vector2(Config.HALF_L - 5.0 * Config.M, 0)
 			game._foul(game.teams[1][2], victim)
@@ -131,11 +136,16 @@ func _process(_delta: float) -> bool:
 		print("%s FULLTIME after %d frames | score %d-%d | possession changes %d | vision uses %d | calls %d | set pieces %d | fouls %s | eye %s %d pts %s"
 			% [SoccerMatch.Mode.keys()[game.mode], frames, game.score[0], game.score[1], possession_changes,
 				vision_uses, calls, set_pieces, game.stats["fouls"], game.coach.grade(), game.coach.points, game.coach.counts])
-		assert(set_pieces == 2)
+		var forced_ok := set_pieces == 2
 		set_pieces = 0
+		forced_foul = false
+		forced_penalty = false
 		GameSettings.reset_to_defaults()
 		game.handle_screen_tap(Vector2.ZERO)
 		assert(game.state == SoccerMatch.State.MENU and game.menus.page == "modes")
+		if not forced_ok:
+			push_error("forced foul/penalty did not both happen")
+			return true
 	elif frames > 60 * 60 * 10:
 		push_error("match never finished")
 		return true

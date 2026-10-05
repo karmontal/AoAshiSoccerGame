@@ -28,6 +28,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -90,7 +91,7 @@ jobs:
 
       - name: Simulation test (full TEAM + SOLO matches)
         run: |
-          ~/godot/godot --headless --path . --fixed-fps 60 -s tests/sim_test.gd 2>&1 | tee sim.log
+          timeout 300 ~/godot/godot --headless --path . --fixed-fps 60 -s tests/sim_test.gd 2>&1 | tee sim.log
           grep -q "ALL MODES OK" sim.log
           ! grep -q "SCRIPT ERROR" sim.log
 
