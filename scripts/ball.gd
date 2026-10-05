@@ -26,6 +26,9 @@ var holder: Footballer = null
 var intended_receiver: Footballer = null
 var last_kicker: Footballer = null
 var frozen := false
+## Network clients mirror the host instead of simulating.
+var remote := false
+var net_pos := Vector2.ZERO
 ## Sideways curl in radians per second (finesse shots, curled passes).
 var spin := 0.0
 var _ignore_kicker := 0.0
@@ -36,7 +39,7 @@ var _trail_ramp: Gradient
 
 
 func _physics_process(delta: float) -> void:
-	if frozen:
+	if frozen or remote:
 		return
 	_ignore_kicker = maxf(_ignore_kicker - delta, 0.0)
 	if holder != null:

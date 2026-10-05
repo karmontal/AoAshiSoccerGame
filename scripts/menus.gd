@@ -5,6 +5,7 @@ extends Control
 
 const VERSION := "v0.6"
 const VISION_BLUE := Color(0.35, 0.8, 1.0)
+const COOP_GREEN := Color(0.45, 1.0, 0.55)
 const ACCENT := Color(1.0, 0.75, 0.2)
 
 var game: SoccerMatch
@@ -24,6 +25,13 @@ var _result_total: Label
 var _result_detail: Label
 var _result_note: Label
 var _share_button: Button
+var _coop_status: Label
+var _join_list: VBoxContainer
+var _ip_edit: LineEdit
+var _lobby_info: Label
+var _lobby_players: Label
+var _lobby_start: Button
+var _lobby_tactics: Button
 var _setting_labels := {}
 var _logo: Control
 var _time := 0.0
@@ -40,6 +48,11 @@ func _ready() -> void:
 	_pages["tactics"] = _build_tactics()
 	_pages["daily"] = _build_daily()
 	_pages["daily_result"] = _build_daily_result()
+	_pages["coop"] = _build_coop()
+	_pages["join"] = _build_join()
+	_pages["lobby"] = _build_lobby()
+	game.net.lobby_changed.connect(_refresh_lobby)
+	game.net.games_changed.connect(_refresh_join)
 	for p: Control in _pages.values():
 		add_child(p)
 	show_page("title")
@@ -58,6 +71,13 @@ func show_page(name: String) -> void:
 		_refresh_daily()
 	elif name == "daily_result":
 		_refresh_result()
+	elif name == "lobby" or name == "coop":
+		_refresh_lobby()
+	if name == "join":
+		game.net.start_discovery()
+		_refresh_join()
+	else:
+		game.net.stop_discovery()
 
 
 func open_settings(from_page: String) -> void:
@@ -96,6 +116,13 @@ func go_back() -> void:
 			show_page("title")
 		"daily_result":
 			show_page("daily")
+		"coop":
+			show_page("modes")
+		"join":
+			show_page("coop")
+		"lobby":
+			game.net.leave()
+			show_page("coop")
 		"pause":
 			game.resume_game()
 		"title":
@@ -143,12 +170,14 @@ func _build_modes() -> Control:
 	box.add_child(_header("CHOOSE MODE"))
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 36)
+	row.add_theme_constant_override("separation", 24)
 	box.add_child(row)
 	row.add_child(_mode_card("TEAM", "Control whoever is nearest\nthe ball. Classic arcade.",
 		Config.TEAM_COLORS[0], func() -> void: _choose_mode(SoccerMatch.Mode.TEAM)))
 	row.add_child(_mode_card("SOLO", "You are #9 all match.\nFind space, CALL for the ball.",
 		ACCENT, func() -> void: _choose_mode(SoccerMatch.Mode.SOLO)))
+	row.add_child(_mode_card("CO-OP", "Up to 4 friends on the\nsame Wi-Fi, one player each.",
+		COOP_GREEN, func() -> void: show_page("coop")))
 	box.add_child(_button("BACK", func() -> void: show_page("title"), 26, Vector2(240, 60)))
 	return root
 
@@ -218,6 +247,112 @@ func open_tactics(from_page: String) -> void:
 func _start(mode: SoccerMatch.Mode) -> void:
 	show_page("")
 	game.start_match(mode)
+
+
+# --- Wi-Fi co-op -------------------------------------------------------------
+
+func _build_coop() -> Control:
+	var root := _page()
+	_dim(root)
+	var box := _column(root, 16)
+	box.add_child(_header("CO-OP"))
+	box.add_child(_label("Play together on the same Wi-Fi: each friend controls one attacker\n(P1 #9, P2 #10, P3 #7, P4 #11) against the computer.", 22, Color(0.8, 0.9, 1.0)))
+	_coop_status = _label("", 20, Color(1, 0.75, 0.6))
+	box.add_child(_coop_status)
+	box.add_child(_button("HOST A GAME", func() -> void:
+		if game.net.host():
+			show_page("lobby"), 32, Vector2(400, 74), COOP_GREEN))
+	box.add_child(_button("JOIN A GAME", func() -> void: show_page("join"), 30, Vector2(400, 68)))
+	box.add_child(_button("BACK", func() -> void: show_page("modes"), 24, Vector2(240, 56)))
+	return root
+
+
+func _build_join() -> Control:
+	var root := _page()
+	_dim(root)
+	var box := _column(root, 14)
+	box.add_child(_header("JOIN"))
+	box.add_child(_label("Games on your Wi-Fi:", 22, Color(0.8, 0.9, 1.0)))
+	_join_list = VBoxContainer.new()
+	_join_list.add_theme_constant_override("separation", 8)
+	box.add_child(_join_list)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	box.add_child(row)
+	_ip_edit = LineEdit.new()
+	_ip_edit.placeholder_text = "Host IP, e.g. 192.168.1.20"
+	_ip_edit.custom_minimum_size = Vector2(360, 56)
+	_ip_edit.add_theme_font_size_override("font_size", 24)
+	_ip_edit.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_NUMBER_DECIMAL
+	row.add_child(_ip_edit)
+	row.add_child(_button("JOIN", func() -> void: _join(_ip_edit.text), 26, Vector2(160, 56), COOP_GREEN))
+	box.add_child(_button("BACK", func() -> void: show_page("coop"), 24, Vector2(240, 56)))
+	return root
+
+
+func _refresh_join() -> void:
+	if _join_list == null:
+		return
+	for child in _join_list.get_children():
+		child.queue_free()
+	var games: Dictionary = game.net.games
+	if games.is_empty():
+		_join_list.add_child(_label("Searching...", 22, Color(1, 1, 1, 0.6)))
+	for ip: String in games:
+		var info: Dictionary = games[ip]
+		var text := "%s   (%d/4)   %s" % [info["name"], info["players"], ip]
+		_join_list.add_child(_button(text, func() -> void: _join(ip), 22, Vector2(520, 56), COOP_GREEN))
+
+
+func _join(ip: String) -> void:
+	if ip.strip_edges() != "" and game.net.join(ip):
+		show_page("lobby")
+
+
+func _build_lobby() -> Control:
+	var root := _page()
+	_dim(root)
+	var box := _column(root, 14)
+	box.add_child(_header("CO-OP LOBBY"))
+	_lobby_info = _label("", 22, Color(0.8, 0.9, 1.0))
+	box.add_child(_lobby_info)
+	_lobby_players = _label("", 26, Color.WHITE)
+	box.add_child(_lobby_players)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 20)
+	box.add_child(row)
+	row.add_child(_button("LEAVE", func() -> void: go_back(), 24, Vector2(200, 60)))
+	_lobby_tactics = _button("TACTICS", func() -> void: open_tactics("lobby"), 24, Vector2(200, 60))
+	row.add_child(_lobby_tactics)
+	_lobby_start = _button("START MATCH", func() -> void:
+		show_page("")
+		game.net.start_match(), 30, Vector2(300, 66), COOP_GREEN)
+	row.add_child(_lobby_start)
+	return root
+
+
+func _refresh_lobby() -> void:
+	if _lobby_info == null:
+		return
+	var net := game.net
+	_coop_status.text = net.status
+	var hosting := net.role == "host"
+	var ips := NetCoop.local_ips()
+	if hosting:
+		_lobby_info.text = "You are hosting.  Your IP: %s\n%s" % [", ".join(ips) if not ips.is_empty() else "?", net.status]
+	else:
+		_lobby_info.text = net.status
+	var lines := PackedStringArray()
+	for peer: int in net.players:
+		var s: int = net.players[peer]
+		var me := " (you)" if peer == multiplayer.get_unique_id() else ""
+		lines.append("P%d  -  #%d%s" % [s + 1, NetCoop.SLOTS[s], me])
+	lines.sort()
+	_lobby_players.text = "\n".join(lines) if not lines.is_empty() else "..."
+	_lobby_start.visible = hosting
+	_lobby_tactics.visible = hosting
 
 
 # --- Daily Vision -----------------------------------------------------------
@@ -433,7 +568,7 @@ func _button(text: String, on_press: Callable, size: int, min_size: Vector2, acc
 
 
 func _mode_card(title: String, text: String, accent: Color, on_press: Callable) -> Button:
-	var b := _button("\n\n" + text, on_press, 22, Vector2(340, 220), accent)
+	var b := _button("\n\n" + text, on_press, 21, Vector2(330, 220), accent)
 	var title_label := _label(title, 48, accent)
 	title_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
 	title_label.position.y = 22

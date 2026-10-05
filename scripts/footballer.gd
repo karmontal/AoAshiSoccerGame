@@ -9,6 +9,8 @@ const DEF := 1
 const MID := 2
 const FWD := 3
 const ARROW_HEIGHT := 2.15
+## Marker colours per co-op player: P1 yellow, P2 cyan, P3 pink, P4 lime.
+const SLOT_COLORS := [Color(1, 0.88, 0.2), Color(0.3, 0.9, 1.0), Color(1.0, 0.45, 0.8), Color(0.6, 1.0, 0.3)]
 
 ## Defensive actions.
 const ACT_NONE := 0
@@ -33,6 +35,8 @@ var facing := Vector2.RIGHT
 var is_human := false
 ## Hide the selection ring/arrow (e.g. during close-up camera shots).
 var hide_marker := false
+## Show "P1".."P4" above controlled players (network games).
+var slot_tags_visible := false
 var tackle_cooldown := 0.0
 var stun := 0.0
 var decision_timer := 0.0
@@ -50,12 +54,20 @@ var action_dir := Vector2.RIGHT
 ## Set once a slide/tackle has had its outcome, so it is only rolled once.
 var action_resolved := false
 var fouls := 0
+## Bumped on every kick so network clients can replay the animation.
+var kick_count := 0
+## Co-op controller slot (0 = local / host) and the latest networked position.
+var slot := 0
+var net_pos := Vector2.ZERO
 var _get_up := 0.0
 
 var model: PlayerModel
 var _ring: MeshInstance3D
 var _arrow: MeshInstance3D
 var _yaw := 0.0
+var _ring_mat: StandardMaterial3D
+var _arrow_mat: ShaderMaterial
+var _tag: Label3D
 
 
 func _ready() -> void:
@@ -72,7 +84,8 @@ func _ready() -> void:
 	torus.outer_radius = 0.68
 	torus.rings = 32
 	torus.ring_segments = 4
-	_ring = Toon.mesh_instance(torus, Toon.flat(Color(1, 0.88, 0.2)), Vector3(0, 0.04, 0))
+	_ring_mat = Toon.flat(SLOT_COLORS[0])
+	_ring = Toon.mesh_instance(torus, _ring_mat, Vector3(0, 0.04, 0))
 	_ring.scale = Vector3(1, 0.15, 1)
 	_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_ring)
@@ -81,14 +94,36 @@ func _ready() -> void:
 	cone.top_radius = 0.16
 	cone.bottom_radius = 0.0
 	cone.height = 0.28
-	_arrow = Toon.mesh_instance(cone, Toon.material(Color(1, 0.88, 0.2), true, 0.025), Vector3(0, ARROW_HEIGHT, 0))
+	_arrow_mat = Toon.material(SLOT_COLORS[0], true, 0.025)
+	_arrow = Toon.mesh_instance(cone, _arrow_mat, Vector3(0, ARROW_HEIGHT, 0))
 	_arrow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_arrow)
+	_tag = Label3D.new()
+	_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_tag.font_size = 96
+	_tag.pixel_size = 0.0075
+	_tag.outline_size = 24
+	_tag.outline_modulate = Config.INK
+	_tag.no_depth_test = true
+	_tag.position = Vector3(0, ARROW_HEIGHT + 0.6, 0)
+	_tag.visible = false
+	add_child(_tag)
 	_sync_visual(0.0)
 
 
 func play_kick() -> void:
+	kick_count += 1
 	model.play_kick()
+
+
+func set_slot(new_slot: int) -> void:
+	if new_slot == slot and _tag != null and _tag.text != "":
+		return
+	slot = new_slot
+	_ring_mat.albedo_color = SLOT_COLORS[slot]
+	_arrow_mat.set_shader_parameter("albedo", SLOT_COLORS[slot])
+	_tag.text = "P%d" % (slot + 1)
+	_tag.modulate = SLOT_COLORS[slot]
 
 
 func busy() -> bool:
@@ -108,7 +143,7 @@ func start_tackle(dir: Vector2) -> bool:
 		return false
 	_begin(ACT_TACKLE, TACKLE_TIME, dir)
 	tackle_cooldown = 0.7
-	model.play_kick()
+	play_kick()
 	return true
 
 
@@ -172,6 +207,7 @@ func _sync_visual(delta: float) -> void:
 	model.animate(delta, run, stun > 0.0 and not sliding)
 	_ring.visible = is_human and not hide_marker
 	_arrow.visible = is_human and not hide_marker
+	_tag.visible = is_human and not hide_marker and slot_tags_visible
 	if is_human:
 		_ring.rotate_y(delta * 2.0)
 		_arrow.position.y = ARROW_HEIGHT + sin(Time.get_ticks_msec() * 0.008) * 0.08

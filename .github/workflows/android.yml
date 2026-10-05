@@ -101,6 +101,17 @@ jobs:
           grep -q "CHALLENGE FLOW OK" challenge.log
           ! grep -q "SCRIPT ERROR" challenge.log
 
+      - name: Wi-Fi co-op test (host + client processes)
+        run: |
+          timeout 120 ~/godot/godot --headless --path . -s tests/net_host_test.gd > host.log 2>&1 &
+          sleep 1
+          timeout 120 ~/godot/godot --headless --path . -s tests/net_client_test.gd 2>&1 | tee client.log
+          wait
+          cat host.log
+          grep -q "CLIENT OK" client.log
+          grep -q "HOST OK" host.log
+          ! grep -q "SCRIPT ERROR" client.log host.log
+
       - name: Export APK
         run: |
           mkdir -p build

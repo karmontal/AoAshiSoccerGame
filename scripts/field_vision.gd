@@ -41,7 +41,9 @@ func activate() -> void:
 		return
 	active = true
 	game.end_cinematic()
-	Engine.time_scale = SLOW_SCALE
+	# Slowing time would slow the whole network match, so co-op skips it.
+	if not game.net_active:
+		Engine.time_scale = SLOW_SCALE
 	game.hud.show_banner("VISION", Color(0.3, 0.8, 1.0), 0.8, 0.6)
 
 
