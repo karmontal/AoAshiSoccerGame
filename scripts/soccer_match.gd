@@ -55,6 +55,8 @@ var remote := {}
 var net_active := false
 ## Clients only mirror the host's simulation.
 var is_client := false
+## Online room server: runs the match for remote players only, no local player.
+var dedicated := false
 ## This device is the co-op coach: tactical view and orders, no player.
 var coach_view := false
 var coach_selected: Footballer = null
@@ -92,6 +94,13 @@ var _caller: Footballer = null
 var _snapshot_timer := 0.0
 ## A shot is in flight: a goal-line bounce now is a near miss.
 var _shot_live := false
+## Client-side prediction of the local player: input number, and the
+## predicted position after each input not yet confirmed by the host.
+var _input_seq := 0
+var _pred_history: Array = []
+var _predicting := false
+## Biggest correction the host applied to the prediction (tests / tuning).
+var max_correction := 0.0
 
 
 func _ready() -> void:
@@ -148,6 +157,23 @@ func _ready() -> void:
 	_set_human(human)
 	apply_settings()
 	_enter_menu()
+	_start_room_from_args()
+
+
+## `-- --room CODE --port N [--lobby P] [--idle S]`: run as an online room server.
+func _start_room_from_args() -> void:
+	var args := OS.get_cmdline_user_args()
+	var i := args.find("--room")
+	if i < 0 or i + 1 >= args.size():
+		return
+	var opts := {"--port": "7801", "--lobby": "0", "--idle": "90"}
+	for key: String in opts:
+		var k := args.find(key)
+		if k >= 0 and k + 1 < args.size():
+			opts[key] = args[k + 1]
+	GameSettings.reset_to_defaults()
+	if not net.start_dedicated(int(opts["--port"]), args[i + 1], int(opts["--lobby"]), float(opts["--idle"])):
+		get_tree().quit(1)
 
 
 func _register_inputs() -> void:
@@ -352,6 +378,7 @@ func _on_goal(scoring_team: int) -> void:
 
 func _end_match() -> void:
 	state = State.FULLTIME
+	_state_timer = 6.0
 	time_left = 0.0
 	ball.frozen = true
 	vision.deactivate()
@@ -419,10 +446,9 @@ func _process(delta: float) -> void:
 	if state == State.FULLTIME:
 		if Input.is_action_just_pressed("pass") or Input.is_action_just_pressed("shoot"):
 			_leave_fulltime()
-	elif state == State.PLAYING and not autopilot and not coach_view:
+	elif state == State.PLAYING and not autopilot and not coach_view and not dedicated:
 		local_input.sample_local(_input_vector())
 		if is_client:
-			net.send_input(local_input)
 			_track_client_charges()
 			if local_input.just_pressed["vision"]:
 				vision.toggle()
@@ -444,6 +470,7 @@ func _process(delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	if is_client:
+		_predict_local(delta)
 		_smooth_remote_state(delta)
 		return
 	match state:
@@ -463,6 +490,11 @@ func _physics_process(delta: float) -> void:
 				for p: Footballer in teams[t]:
 					p.desired_velocity = Vector2.ZERO
 					p.step(delta)
+			if state == State.FULLTIME and dedicated:
+				# Nobody taps "continue" on a server: back to the room lobby after a while.
+				_state_timer -= delta
+				if _state_timer <= 0.0:
+					_leave_fulltime()
 			if state == State.GOAL:
 				_state_timer -= delta
 				if _state_timer <= 0.0:
@@ -479,10 +511,12 @@ func _physics_process(delta: float) -> void:
 	_switch_cooldown -= delta
 	_call_timer -= delta
 	_possession_time += delta
-	if not autopilot:
+	if not autopilot and not dedicated:
 		_move_controlled(human, _input_vector())
 	for peer: int in remote:
-		_move_controlled(remote[peer]["player"], remote[peer]["input"].vector)
+		var inp: PlayerInput = remote[peer]["input"]
+		inp.next_move()
+		_move_controlled(remote[peer]["player"], inp.vector)
 	_update_ai(delta)
 	for t in 2:
 		for p: Footballer in teams[t]:
@@ -615,9 +649,17 @@ func _call_for_ball(p: Footballer) -> void:
 
 func _set_human(p: Footballer) -> void:
 	if human != null:
-		human.is_human = false
+		human.is_human = _remote_owns(human)
 	human = p
-	human.is_human = true
+	# A room server has no local player: its "human" is AI unless a friend has it.
+	human.is_human = not dedicated or _remote_owns(p)
+
+
+func _remote_owns(p: Footballer) -> bool:
+	for peer: int in remote:
+		if remote[peer]["player"] == p:
+			return true
+	return false
 
 
 func _switch_to_nearest() -> void:
@@ -628,7 +670,7 @@ func _switch_to_nearest() -> void:
 
 
 func _auto_switch() -> void:
-	if mode == Mode.SOLO or _switch_cooldown > 0.0 or (ball.holder != null and ball.holder.team == 0):
+	if mode != Mode.TEAM or _switch_cooldown > 0.0 or (ball.holder != null and ball.holder.team == 0):
 		return
 	if ball.intended_receiver != null and ball.intended_receiver.team == 0:
 		return
@@ -1318,7 +1360,7 @@ func _start_set_piece(team: int, at: Vector2, penalty: bool) -> void:
 
 # --- Network co-op ----------------------------------------------------------
 
-const SNAP_HEADER := 12
+const SNAP_HEADER := 16
 const ORDER_TIME := 5.0
 const MENTALITY_CALLS := ["COACH: DROP BACK!", "COACH: BALANCE!", "COACH: PRESS HIGH!"]
 
@@ -1355,7 +1397,7 @@ func coach_tap(screen_pos: Vector2) -> void:
 		if point != Vector2.INF:
 			net.coach_order.rpc_id(1, coach_selected.number, point)
 		coach_selected = null
-const SNAP_PER_PLAYER := 9
+const SNAP_PER_PLAYER := 10
 
 
 ## Shows a banner here and, on a network host, on every client.
@@ -1432,9 +1474,9 @@ func add_remote(peer_id: int, slot: int) -> void:
 func remove_remote(peer_id: int) -> void:
 	if remote.has(peer_id):
 		var p: Footballer = remote[peer_id]["player"]
-		p.is_human = p == human
-		p.set_slot(0)
 		remote.erase(peer_id)
+		p.is_human = p == human and not dedicated
+		p.set_slot(0)
 
 
 ## Client: mirror the host's match, controlling the player in `slot`.
@@ -1447,6 +1489,8 @@ func start_client(slot: int) -> void:
 	vision.energy = 1.0
 	coach.reset()
 	audio.stop_voice()
+	_pred_history.clear()
+	_predicting = false
 	coach_view = slot == NetCoop.COACH_SLOT
 	if coach_view:
 		_set_human(player_by_number(0, STRIKER))
@@ -1484,10 +1528,13 @@ func end_network() -> void:
 	vision.deactivate()
 	ball.remote = false
 	set_slot_tags(false)
+	_pred_history.clear()
+	_predicting = false
 	for t in 2:
 		for p: Footballer in teams[t]:
 			p.set_slot(0)
 			p.is_human = p == human
+			p.visual_offset = Vector2.ZERO
 
 
 ## Host -> clients, ~30 times a second.
@@ -1495,6 +1542,9 @@ func build_snapshot() -> PackedFloat32Array:
 	var data := PackedFloat32Array()
 	data.resize(SNAP_HEADER + 22 * SNAP_PER_PLAYER)
 	var all: Array = teams[0] + teams[1]
+	var acks := {}
+	for peer: int in remote:
+		acks[remote[peer]["player"]] = remote[peer]["input"].acked
 	data[0] = state
 	data[1] = time_left
 	data[2] = score[0]
@@ -1507,6 +1557,11 @@ func build_snapshot() -> PackedFloat32Array:
 	data[9] = Formations.NAMES.find(team_formation[0])
 	data[10] = Formations.NAMES.find(team_formation[1])
 	data[11] = mode
+	# Ball flight and target, so a client can predict its player's help steering.
+	data[12] = ball.velocity.x
+	data[13] = ball.velocity.y
+	data[14] = ball.vz
+	data[15] = all.find(ball.intended_receiver) if ball.intended_receiver != null else -1
 	for i in all.size():
 		var p: Footballer = all[i]
 		var o := SNAP_HEADER + i * SNAP_PER_PLAYER
@@ -1519,6 +1574,7 @@ func build_snapshot() -> PackedFloat32Array:
 		data[o + 6] = 1.0 if p.stun > 0.0 else 0.0
 		data[o + 7] = p.kick_count
 		data[o + 8] = p.slot if p.is_human else -1
+		data[o + 9] = acks.get(p, 0)
 	return data
 
 
@@ -1532,6 +1588,9 @@ func apply_snapshot(data: PackedFloat32Array) -> void:
 	ball.net_pos = Vector2(data[4], data[5])
 	ball.height = data[6]
 	ball.holder = all[int(data[7])] if data[7] >= 0.0 else null
+	ball.velocity = Vector2(data[12], data[13])
+	ball.vz = data[14]
+	ball.intended_receiver = all[int(data[15])] if data[15] >= 0.0 else null
 	for t in 2:
 		var f: String = Formations.NAMES[int(data[9 + t])]
 		if team_formation[t] != f:
@@ -1540,9 +1599,12 @@ func apply_snapshot(data: PackedFloat32Array) -> void:
 		var p: Footballer = all[i]
 		var o := SNAP_HEADER + i * SNAP_PER_PLAYER
 		p.net_pos = Vector2(data[o], data[o + 1])
-		p.velocity = Vector2(data[o + 2], data[o + 3])
-		p.facing = Vector2.from_angle(data[o + 4])
 		p.action = int(data[o + 5])
+		if p == human and _predicting:
+			_reconcile(p.net_pos, int(data[o + 9]))
+		else:
+			p.velocity = Vector2(data[o + 2], data[o + 3])
+			p.facing = Vector2.from_angle(data[o + 4])
 		p.stun = 0.1 if data[o + 6] > 0.5 else 0.0
 		if int(data[o + 7]) != p.kick_count:
 			p.kick_count = int(data[o + 7])
@@ -1569,9 +1631,67 @@ func _smooth_remote_state(delta: float) -> void:
 	var k := minf(1.0, 18.0 * delta)
 	for t in 2:
 		for p: Footballer in teams[t]:
-			p.pos = p.pos.lerp(p.net_pos, k)
+			if p != human or not _predicting:
+				p.pos = p.pos.lerp(p.net_pos, k)
 	if ball.holder == null:
 		ball.pos = ball.pos.lerp(ball.net_pos, k)
+	else:
+		# Keep the ball at the dribbler's feet (instant for your own predicted player).
+		ball.pos = ball.holder.pos + ball.holder.facing * (Config.PLAYER_RADIUS + Config.BALL_RADIUS + 2.0)
+
+
+## Client: move your own player straight away instead of waiting a round trip
+## for the host. Each input is numbered; snapshots say which one the host has
+## applied, and `_reconcile` fixes any difference.
+func _predict_local(delta: float) -> void:
+	var can_predict := state == State.PLAYING and not coach_view and human.action == Footballer.ACT_NONE \
+			and human.stun <= 0.0
+	if state == State.PLAYING and not coach_view:
+		_input_seq += 1
+		net.send_input(local_input, _input_seq)
+	if not can_predict:
+		_predicting = false
+		_pred_history.clear()
+		return
+	if not _predicting:
+		human.pos = human.net_pos
+		_predicting = true
+	_move_controlled(human, local_input.vector)
+	human.step(delta)
+	# Bump off other players like the host does (they don't move for us here).
+	var min_d := Config.PLAYER_RADIUS * 2.0
+	for t in 2:
+		for q: Footballer in teams[t]:
+			var d := human.pos - q.pos
+			var dist := d.length()
+			if q != human and dist < min_d and dist > 0.01:
+				human.pos += d / dist * (min_d - dist) * 0.5
+	_pred_history.append([_input_seq, human.pos])
+	if _pred_history.size() > 120:
+		_pred_history.pop_front()
+
+
+func _reconcile(server_pos: Vector2, acked: int) -> void:
+	while not _pred_history.is_empty() and _pred_history[0][0] < acked:
+		_pred_history.pop_front()
+	if _pred_history.is_empty() or _pred_history[0][0] != acked:
+		return
+	var error: Vector2 = server_pos - _pred_history[0][1]
+	_pred_history.pop_front()
+	if error.length() < 1.0:
+		return
+	max_correction = maxf(max_correction, error.length())
+	if error.length() > 5.0 * Config.M:
+		# Way off (e.g. knocked over): jump there.
+		human.pos += error
+		human.visual_offset = Vector2.ZERO
+		_pred_history.clear()
+		return
+	# Shift the whole predicted path, and let the model glide over.
+	human.pos += error
+	human.visual_offset -= error
+	for entry: Array in _pred_history:
+		entry[1] += error
 
 
 ## Client: the charge ring is drawn locally from the player's own button holds.

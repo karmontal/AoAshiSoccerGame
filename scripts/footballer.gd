@@ -62,6 +62,9 @@ var net_pos := Vector2.ZERO
 ## Co-op coach order: AI players run here while order_time > 0.
 var order_point := Vector2.ZERO
 var order_time := 0.0
+## Client-side prediction: when a server correction moves `pos`, the model
+## keeps drawing where it was and glides over instead of jumping.
+var visual_offset := Vector2.ZERO
 var _get_up := 0.0
 
 var model: PlayerModel
@@ -201,7 +204,8 @@ func _process(delta: float) -> void:
 
 
 func _sync_visual(delta: float) -> void:
-	position = Config.to_3d(pos)
+	visual_offset = visual_offset.lerp(Vector2.ZERO, minf(1.0, 10.0 * delta))
+	position = Config.to_3d(pos + visual_offset)
 	var target_yaw := atan2(-facing.x, -facing.y)
 	_yaw = target_yaw if delta == 0.0 else lerp_angle(_yaw, target_yaw, minf(1.0, 16.0 * delta))
 	model.rotation.y = _yaw

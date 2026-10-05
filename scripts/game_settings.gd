@@ -45,6 +45,14 @@ static func option_text(key: String) -> String:
 	return _def(key)["options"][get_value(key)]
 
 
+## Sets a setting directly (clamped to its options); `persist` saves it.
+static func set_value(key: String, value: int, persist := true) -> void:
+	_ensure_loaded()
+	_values[key] = clampi(value, 0, _def(key)["options"].size() - 1)
+	if persist:
+		save()
+
+
 ## Moves a setting to the next/previous option (wrapping) and saves.
 static func cycle(key: String, step: int) -> void:
 	_ensure_loaded()

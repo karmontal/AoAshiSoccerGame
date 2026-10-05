@@ -3,7 +3,7 @@ extends Control
 ## Front-end screens built from Control nodes: title, mode select, settings
 ## and the in-match pause menu. Runs while the tree is paused.
 
-const VERSION := "v0.7"
+const VERSION := "v0.8"
 const VISION_BLUE := Color(0.35, 0.8, 1.0)
 const COOP_GREEN := Color(0.45, 1.0, 0.55)
 const ACCENT := Color(1.0, 0.75, 0.2)
@@ -33,6 +33,10 @@ var _lobby_players: Label
 var _lobby_start: Button
 var _lobby_tactics: Button
 var _lobby_coach: Button
+var _lobby_header: Label
+var _online_status: Label
+var _server_edit: LineEdit
+var _code_edit: LineEdit
 var _setting_labels := {}
 var _logo: Control
 var _time := 0.0
@@ -52,6 +56,7 @@ func _ready() -> void:
 	_pages["coop"] = _build_coop()
 	_pages["join"] = _build_join()
 	_pages["lobby"] = _build_lobby()
+	_pages["online"] = _build_online()
 	game.net.lobby_changed.connect(_refresh_lobby)
 	game.net.games_changed.connect(_refresh_join)
 	for p: Control in _pages.values():
@@ -72,7 +77,7 @@ func show_page(name: String) -> void:
 		_refresh_daily()
 	elif name == "daily_result":
 		_refresh_result()
-	elif name == "lobby" or name == "coop":
+	elif name == "lobby" or name == "coop" or name == "online":
 		_refresh_lobby()
 	if name == "join":
 		game.net.start_discovery()
@@ -122,7 +127,11 @@ func go_back() -> void:
 		"join":
 			show_page("coop")
 		"lobby":
+			var was_online := game.net.online
 			game.net.leave()
+			show_page("online" if was_online else "coop")
+		"online":
+			game.net.cancel_online()
 			show_page("coop")
 		"pause":
 			game.resume_game()
@@ -264,8 +273,50 @@ func _build_coop() -> Control:
 		if game.net.host():
 			show_page("lobby"), 32, Vector2(400, 74), COOP_GREEN))
 	box.add_child(_button("JOIN A GAME", func() -> void: show_page("join"), 30, Vector2(400, 68)))
+	box.add_child(_button("PLAY ONLINE", func() -> void: show_page("online"), 30, Vector2(400, 68), VISION_BLUE))
 	box.add_child(_button("BACK", func() -> void: show_page("modes"), 24, Vector2(240, 56)))
 	return root
+
+
+# --- Online rooms --------------------------------------------------------------
+
+func _build_online() -> Control:
+	var root := _page()
+	_dim(root)
+	var box := _column(root, 14)
+	box.add_child(_header("ONLINE"))
+	box.add_child(_label("Play with friends anywhere: create a room and send them its code.", 22, Color(0.8, 0.9, 1.0)))
+	_server_edit = _edit("Server address, e.g. play.example.com", 420)
+	_server_edit.text = NetCoop.load_server_address()
+	_server_edit.text_changed.connect(func(text: String) -> void: NetCoop.save_server_address(text))
+	box.add_child(_server_edit)
+	box.add_child(_button("CREATE ROOM", func() -> void: game.net.create_room(_server_edit.text), 30, Vector2(400, 70), VISION_BLUE))
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	box.add_child(row)
+	_code_edit = _edit("CODE", 160)
+	_code_edit.max_length = 4
+	_code_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_code_edit.text_changed.connect(func(text: String) -> void:
+		var caret := _code_edit.caret_column
+		_code_edit.text = text.to_upper()
+		_code_edit.caret_column = caret)
+	row.add_child(_code_edit)
+	row.add_child(_button("JOIN ROOM", func() -> void: game.net.join_room(_server_edit.text, _code_edit.text), 26, Vector2(220, 56), COOP_GREEN))
+	_online_status = _label("", 20, Color(1, 0.75, 0.6))
+	box.add_child(_online_status)
+	box.add_child(_button("BACK", func() -> void: go_back(), 24, Vector2(240, 56)))
+	return root
+
+
+func _edit(placeholder: String, width: float) -> LineEdit:
+	var e := LineEdit.new()
+	e.placeholder_text = placeholder
+	e.custom_minimum_size = Vector2(width, 56)
+	e.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	e.add_theme_font_size_override("font_size", 24)
+	return e
 
 
 func _build_join() -> Control:
@@ -315,7 +366,8 @@ func _build_lobby() -> Control:
 	var root := _page()
 	_dim(root)
 	var box := _column(root, 14)
-	box.add_child(_header("CO-OP LOBBY"))
+	_lobby_header = _header("CO-OP LOBBY")
+	box.add_child(_lobby_header)
 	_lobby_info = _label("", 22, Color(0.8, 0.9, 1.0))
 	box.add_child(_lobby_info)
 	_lobby_players = _label("", 26, Color.WHITE)
@@ -330,8 +382,11 @@ func _build_lobby() -> Control:
 	_lobby_coach = _button("BE THE COACH", func() -> void: game.net.set_coach(not game.net.is_coach()), 24, Vector2(260, 60), COOP_GREEN)
 	row.add_child(_lobby_coach)
 	_lobby_start = _button("START MATCH", func() -> void:
-		show_page("")
-		game.net.start_match(), 30, Vector2(300, 66), COOP_GREEN)
+		if game.net.role == "host":
+			show_page("")
+			game.net.start_match()
+		else:
+			game.net.request_start(), 30, Vector2(300, 66), COOP_GREEN)
 	row.add_child(_lobby_start)
 	return root
 
@@ -340,25 +395,35 @@ func _refresh_lobby() -> void:
 	if _lobby_info == null:
 		return
 	var net := game.net
+	if page == "online" and net.online and net.role == "client":
+		show_page("lobby")
+		return
 	_coop_status.text = net.status
+	_online_status.text = net.status
 	var hosting := net.role == "host"
 	var ips := NetCoop.local_ips()
+	_lobby_header.text = "ROOM %s" % net.room_code if net.online and net.room_code != "" else "CO-OP LOBBY"
 	if hosting:
 		_lobby_info.text = "You are hosting.  Your IP: %s\n%s" % [", ".join(ips) if not ips.is_empty() else "?", net.status]
+	elif net.online:
+		var who := "You start the match when everyone's in." if net.can_start() else "The room owner starts the match."
+		_lobby_info.text = "Send your friends the code  %s\n%s" % [net.room_code, who]
 	else:
 		_lobby_info.text = net.status
 	var lines := PackedStringArray()
 	for peer: int in net.players:
 		var s: int = net.players[peer]
 		var me := " (you)" if peer == multiplayer.get_unique_id() else ""
+		if net.online and peer == net.room_owner:
+			me += " *"
 		if s == NetCoop.COACH_SLOT:
 			lines.append("COACH  -  tactics & orders%s" % me)
 		else:
 			lines.append("P%d  -  #%d%s" % [s + 1, NetCoop.SLOTS[s], me])
 	lines.sort()
 	_lobby_players.text = "\n".join(lines) if not lines.is_empty() else "..."
-	_lobby_start.visible = hosting
-	_lobby_tactics.visible = hosting
+	_lobby_start.visible = net.can_start()
+	_lobby_tactics.visible = net.can_start()
 	_lobby_coach.visible = net.role == "client"
 	_lobby_coach.text = "BE A PLAYER" if net.is_coach() else "BE THE COACH"
 

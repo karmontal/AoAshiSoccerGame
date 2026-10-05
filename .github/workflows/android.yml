@@ -124,6 +124,20 @@ jobs:
           grep -q "COACH OK" coach.log
           grep -q "CLIENT OK" client.log
 
+      - name: Online rooms test (lobby + room server + two phones, 100 ms lag)
+        run: |
+          timeout 150 ~/godot/godot --headless --path . -s server/lobby.gd -- port=7790 first-room-port=7891 idle=3 exit-when-done > lobby.log 2>&1 &
+          sleep 1
+          timeout 120 ~/godot/godot --headless --path . -s tests/online_test.gd ++ create lag=100 > onA.log 2>&1 &
+          sleep 2
+          timeout 120 ~/godot/godot --headless --path . -s tests/online_test.gd ++ join lag=100 2>&1 | tee onB.log
+          wait
+          cat lobby.log onA.log
+          grep -q "ONLINE A OK" onA.log
+          grep -q "ONLINE B OK" onB.log
+          grep -q "LOBBY: room .* closed" lobby.log
+          ! grep -q "SCRIPT ERROR" lobby.log onA.log onB.log
+
       - name: Export APK
         run: |
           mkdir -p build
