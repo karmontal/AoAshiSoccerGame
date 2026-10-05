@@ -70,7 +70,8 @@ func _layout() -> void:
 
 
 func _in_match() -> bool:
-	return game.state != SoccerMatch.State.MENU and game.state != SoccerMatch.State.FULLTIME
+	return game.state != SoccerMatch.State.MENU and game.state != SoccerMatch.State.FULLTIME \
+		and game.state != SoccerMatch.State.CHALLENGE
 
 
 func _input(event: InputEvent) -> void:
@@ -93,7 +94,7 @@ func _on_touch(event: InputEventScreenTouch) -> void:
 
 	if game.state == SoccerMatch.State.MENU:
 		return  # Menu screens are Control nodes and handle their own input.
-	if game.state == SoccerMatch.State.FULLTIME:
+	if game.state == SoccerMatch.State.FULLTIME or game.state == SoccerMatch.State.CHALLENGE:
 		if game.handle_screen_tap(event.position):
 			get_viewport().set_input_as_handled()
 		return

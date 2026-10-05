@@ -3,7 +3,8 @@ extends Control
 ## Front-end screens built from Control nodes: title, mode select, settings
 ## and the in-match pause menu. Runs while the tree is paused.
 
-const VERSION := "v0.4"
+const VERSION := "v0.6"
+const VISION_BLUE := Color(0.35, 0.8, 1.0)
 const ACCENT := Color(1.0, 0.75, 0.2)
 
 var game: SoccerMatch
@@ -16,6 +17,13 @@ var _pending_mode := SoccerMatch.Mode.TEAM
 var _preview: FormationPreview
 var _opponent_label: Label
 var _kickoff_button: Button
+var _daily_info: Label
+var _daily_play: Button
+var _result_title: Label
+var _result_total: Label
+var _result_detail: Label
+var _result_note: Label
+var _share_button: Button
 var _setting_labels := {}
 var _logo: Control
 var _time := 0.0
@@ -30,6 +38,8 @@ func _ready() -> void:
 	_pages["settings"] = _build_settings()
 	_pages["pause"] = _build_pause()
 	_pages["tactics"] = _build_tactics()
+	_pages["daily"] = _build_daily()
+	_pages["daily_result"] = _build_daily_result()
 	for p: Control in _pages.values():
 		add_child(p)
 	show_page("title")
@@ -44,6 +54,10 @@ func show_page(name: String) -> void:
 		_play_logo_intro()
 	elif name == "settings" or name == "tactics":
 		_refresh_settings()
+	elif name == "daily":
+		_refresh_daily()
+	elif name == "daily_result":
+		_refresh_result()
 
 
 func open_settings(from_page: String) -> void:
@@ -78,12 +92,19 @@ func go_back() -> void:
 			show_page("title")
 		"tactics":
 			show_page(_tactics_return)
+		"daily":
+			show_page("title")
+		"daily_result":
+			show_page("daily")
 		"pause":
 			game.resume_game()
 		"title":
 			get_tree().quit()
 		_:
-			game.pause_game()
+			if game.state == SoccerMatch.State.CHALLENGE:
+				game.quit_challenge()
+			else:
+				game.pause_game()
 
 
 # --- Pages ------------------------------------------------------------------
@@ -100,8 +121,9 @@ func _build_title() -> Control:
 	_logo = _make_logo()
 	box.add_child(_logo)
 	box.add_child(_label("Read the pitch. Win the space.", 26, Color(0.8, 0.9, 1.0)))
-	box.add_child(_spacer(20))
-	box.add_child(_button("PLAY", func() -> void: show_page("modes"), 40, Vector2(380, 84), ACCENT))
+	box.add_child(_spacer(6))
+	box.add_child(_button("PLAY", func() -> void: show_page("modes"), 38, Vector2(380, 76), ACCENT))
+	box.add_child(_button("DAILY VISION", func() -> void: show_page("daily"), 30, Vector2(380, 66), VISION_BLUE))
 	box.add_child(_button("SETTINGS", func() -> void: open_settings("title"), 30, Vector2(380, 70)))
 
 	var version := _label(VERSION, 16, Color(1, 1, 1, 0.5))
@@ -196,6 +218,80 @@ func open_tactics(from_page: String) -> void:
 func _start(mode: SoccerMatch.Mode) -> void:
 	show_page("")
 	game.start_match(mode)
+
+
+# --- Daily Vision -----------------------------------------------------------
+
+func _build_daily() -> Control:
+	var root := _page()
+	_dim(root)
+	var box := _column(root, 16)
+	box.add_child(_header("DAILY VISION #%d" % DailyStats.day_number()))
+	box.add_child(_label("3 tactical puzzles - the same for everyone today.\nRead the pitch: pass, find space, cut the lane.", 22, Color(0.8, 0.9, 1.0)))
+	_daily_info = _label("", 26, ACCENT)
+	box.add_child(_daily_info)
+	_daily_play = _button("PLAY TODAY", func() -> void:
+		show_page("")
+		game.challenge.start_daily(), 34, Vector2(380, 76), VISION_BLUE)
+	box.add_child(_daily_play)
+	box.add_child(_button("PRACTICE", func() -> void:
+		show_page("")
+		game.challenge.start_practice(), 28, Vector2(380, 64)))
+	box.add_child(_button("BACK", func() -> void: show_page("title"), 24, Vector2(240, 56)))
+	return root
+
+
+func _refresh_daily() -> void:
+	var info := DailyStats.info()
+	var played := DailyStats.played_today()
+	var today := "TODAY: %d / 300" % _sum(info["last_scores"]) if played else "TODAY: NOT PLAYED"
+	_daily_info.text = "%s     STREAK: %d     BEST: %d" % [today, DailyStats.current_streak(), info["best"]]
+	_daily_play.disabled = played
+	_daily_play.text = "PLAYED - SEE YOU TOMORROW" if played else "PLAY TODAY"
+
+
+func _build_daily_result() -> Control:
+	var root := _page()
+	_dim(root)
+	var box := _column(root, 14)
+	_result_title = _header("")
+	box.add_child(_result_title)
+	_result_total = _label("", 72, ACCENT)
+	box.add_child(_result_total)
+	_result_detail = _label("", 26, Color(0.85, 0.92, 1.0))
+	box.add_child(_result_detail)
+	_result_note = _label("", 20, Color(0.6, 1.0, 0.7))
+	box.add_child(_result_note)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 24)
+	box.add_child(row)
+	_share_button = _button("SHARE", func() -> void:
+		var ch := game.challenge
+		DisplayServer.clipboard_set(DailyStats.share_text(ch.results, ch.kinds()))
+		_result_note.text = "Copied! Paste it to your friends.", 28, Vector2(240, 62), VISION_BLUE)
+	row.add_child(_share_button)
+	row.add_child(_button("DONE", func() -> void: show_page("daily"), 28, Vector2(240, 62), ACCENT))
+	return root
+
+
+func _refresh_result() -> void:
+	var ch := game.challenge
+	var parts := PackedStringArray()
+	for i in ch.results.size():
+		parts.append("%s %d" % [Challenge.SHORT_NAMES[ch.puzzles[i].kind], ch.results[i]])
+	_result_title.text = ("DAILY VISION #%d" % DailyStats.day_number()) if ch.daily else "PRACTICE"
+	_result_total.text = "%d / %d" % [_sum(ch.results), ch.results.size() * 100]
+	_result_detail.text = "   ·   ".join(parts)
+	_result_note.text = ("STREAK: %d" % DailyStats.current_streak()) if ch.daily else ""
+	_share_button.visible = ch.daily
+
+
+static func _sum(values: Array) -> int:
+	var total := 0
+	for v: int in values:
+		total += v
+	return total
 
 
 func _build_tactics() -> Control:

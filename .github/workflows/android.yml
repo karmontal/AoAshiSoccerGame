@@ -95,6 +95,12 @@ jobs:
           grep -q "ALL MODES OK" sim.log
           ! grep -q "SCRIPT ERROR" sim.log
 
+      - name: Daily Vision puzzle test
+        run: |
+          timeout 300 ~/godot/godot --headless --path . --fixed-fps 60 -s tests/challenge_test.gd 2>&1 | tee challenge.log
+          grep -q "CHALLENGE FLOW OK" challenge.log
+          ! grep -q "SCRIPT ERROR" challenge.log
+
       - name: Export APK
         run: |
           mkdir -p build

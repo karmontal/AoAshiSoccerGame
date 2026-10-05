@@ -3,7 +3,7 @@ extends Node3D
 ## Builds the match scene in code and runs everything: kickoff/goal flow,
 ## the human-controlled player, team AI, passing, shooting and possession.
 
-enum State { MENU, KICKOFF, PLAYING, GOAL, FULLTIME, SET_PIECE }
+enum State { MENU, KICKOFF, PLAYING, GOAL, FULLTIME, SET_PIECE, CHALLENGE }
 ## TEAM: control switches to whoever is nearest the ball.
 ## SOLO: you are always #9 and play off the ball, Ao Ashi style; teammates
 ## carry the ball and you call for it.
@@ -44,6 +44,7 @@ var vision: FieldVision
 var hud: Hud
 var controls: TouchControls
 var menus: Menus
+var challenge: ChallengeMode
 var stadium: Stadium
 var camera: Camera3D
 var human: Footballer
@@ -103,6 +104,9 @@ func _ready() -> void:
 	vision = FieldVision.new()
 	vision.game = self
 	ui.add_child(vision)
+	challenge = ChallengeMode.new()
+	challenge.game = self
+	ui.add_child(challenge)
 	hud = Hud.new()
 	hud.game = self
 	ui.add_child(hud)
@@ -154,7 +158,7 @@ func apply_settings() -> void:
 
 
 func pause_game() -> void:
-	if state == State.MENU or state == State.FULLTIME or get_tree().paused:
+	if state == State.MENU or state == State.FULLTIME or state == State.CHALLENGE or get_tree().paused:
 		return
 	controls.release_all()
 	get_tree().paused = true
@@ -175,6 +179,46 @@ func quit_to_menu() -> void:
 func vibrate(ms: int) -> void:
 	if GameSettings.enabled("vibration") and not autopilot:
 		Input.vibrate_handheld(ms)
+
+
+# --- Daily Vision puzzles ---------------------------------------------------
+
+## Freezes the scene into a puzzle's situation.
+func load_challenge(c: Challenge) -> void:
+	state = State.CHALLENGE
+	vision.deactivate()
+	_reset_positions()
+	for t in 2:
+		apply_formation(t, c.formations[t])
+		for p: Footballer in teams[t]:
+			p.pos = c.positions[t][p.number]
+			p.facing = Vector2(Config.attack_dir(t), 0)
+	var carrier := player_by_number(c.carrier_team, c.carrier_number)
+	ball.place(carrier.pos)
+	ball.holder = carrier
+	_last_holder = carrier
+	_set_human(player_by_number(c.me_team, c.me_number))
+
+
+func finish_challenge() -> void:
+	_enter_menu()
+	menus.show_page("daily_result")
+
+
+func quit_challenge() -> void:
+	challenge.active = false
+	_enter_menu()
+	menus.show_page("daily")
+
+
+## Screen position to a point on the pitch (logic plane), or Vector2.INF.
+func screen_to_pitch(screen_pos: Vector2) -> Vector2:
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	if absf(dir.y) < 0.0001:
+		return Vector2.INF
+	var hit := from + dir * (-from.y / dir.y)
+	return Vector2(hit.x, hit.z) / Config.WORLD_SCALE
 
 
 ## Starts a new match in the given mode (from the menu).
@@ -277,6 +321,8 @@ func _end_match() -> void:
 func handle_screen_tap(screen_pos: Vector2) -> bool:
 	if state == State.MENU:
 		return false
+	if state == State.CHALLENGE:
+		return challenge.handle_tap(screen_pos)
 	if state == State.FULLTIME:
 		_enter_menu()
 		menus.show_page("modes")
@@ -317,7 +363,7 @@ func _process(delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	match state:
-		State.MENU:
+		State.MENU, State.CHALLENGE:
 			for t in 2:
 				for p: Footballer in teams[t]:
 					p.desired_velocity = Vector2.ZERO
@@ -505,7 +551,18 @@ func _update_camera(real: float) -> void:
 	var target_look: Vector3
 	var fov := 42.0
 	var follow := 4.0
-	if state == State.MENU:
+	if state == State.CHALLENGE and challenge.active:
+		var c := challenge.current()
+		var centre := c.carrier_pos() + Vector2(Config.attack_dir(c.carrier_team) * 4.0 * Config.M, 0)
+		var height := 54.0
+		if c.kind != Challenge.Kind.PASS:
+			centre = (c.carrier_pos() + c.me_pos()) * 0.5
+			height = 40.0
+		target_look = Config.to_3d(centre)
+		target_pos = target_look + Vector3(0, height, height * 0.45)
+		fov = 46.0
+		follow = 3.0
+	elif state == State.MENU:
 		var a := _clock * 0.12
 		target_pos = Vector3(sin(a) * 46.0, 15.0, cos(a) * 40.0)
 		target_look = Vector3(0, 1.0, 0)

@@ -47,7 +47,7 @@ func _process(delta: float) -> void:
 func _draw() -> void:
 	var vs := get_viewport_rect().size
 	var font := ThemeDB.fallback_font
-	if game.state == SoccerMatch.State.MENU:
+	if game.state == SoccerMatch.State.MENU or game.state == SoccerMatch.State.CHALLENGE:
 		return
 	if game.cinematic_active():
 		_draw_focus_lines(vs)
