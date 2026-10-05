@@ -150,7 +150,7 @@ func _draw_fulltime(vs: Vector2, font: Font) -> void:
 	_text(font, Vector2(0, vs.y * 0.5), "CAPTAIN'S EYE", 26, Color(0.7, 0.9, 1.0), vs.x)
 	_text(font, Vector2(0, vs.y * 0.63), "%s   %d pts" % [g, coach.points], 56, GRADE_COLORS[g], vs.x)
 	var parts := PackedStringArray()
-	for id: String in ["open_lane", "run_behind", "free_space", "lane_cut", "goal_side", "tight_mark", "intercept", "received"]:
+	for id: String in ["open_lane", "run_behind", "free_space", "lane_cut", "goal_side", "tight_mark", "intercept", "received", "slide_won", "tackle_won", "foul"]:
 		if coach.counts.get(id, 0) > 0:
 			parts.append("%s x%d" % [PositioningCoach.EVENTS[id][0].trim_suffix("!"), coach.counts[id]])
 	if parts.is_empty():

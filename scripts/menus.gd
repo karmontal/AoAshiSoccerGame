@@ -11,6 +11,11 @@ var page := ""
 
 var _pages := {}
 var _settings_return := "title"
+var _tactics_return := "modes"
+var _pending_mode := SoccerMatch.Mode.TEAM
+var _preview: FormationPreview
+var _opponent_label: Label
+var _kickoff_button: Button
 var _setting_labels := {}
 var _logo: Control
 var _time := 0.0
@@ -24,6 +29,7 @@ func _ready() -> void:
 	_pages["modes"] = _build_modes()
 	_pages["settings"] = _build_settings()
 	_pages["pause"] = _build_pause()
+	_pages["tactics"] = _build_tactics()
 	for p: Control in _pages.values():
 		add_child(p)
 	show_page("title")
@@ -36,7 +42,7 @@ func show_page(name: String) -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE if name == "" else Control.MOUSE_FILTER_STOP
 	if name == "title":
 		_play_logo_intro()
-	elif name == "settings":
+	elif name == "settings" or name == "tactics":
 		_refresh_settings()
 
 
@@ -70,6 +76,8 @@ func go_back() -> void:
 			show_page(_settings_return)
 		"modes":
 			show_page("title")
+		"tactics":
+			show_page(_tactics_return)
 		"pause":
 			game.resume_game()
 		"title":
@@ -116,9 +124,9 @@ func _build_modes() -> Control:
 	row.add_theme_constant_override("separation", 36)
 	box.add_child(row)
 	row.add_child(_mode_card("TEAM", "Control whoever is nearest\nthe ball. Classic arcade.",
-		Config.TEAM_COLORS[0], func() -> void: _start(SoccerMatch.Mode.TEAM)))
+		Config.TEAM_COLORS[0], func() -> void: _choose_mode(SoccerMatch.Mode.TEAM)))
 	row.add_child(_mode_card("SOLO", "You are #9 all match.\nFind space, CALL for the ball.",
-		ACCENT, func() -> void: _start(SoccerMatch.Mode.SOLO)))
+		ACCENT, func() -> void: _choose_mode(SoccerMatch.Mode.SOLO)))
 	box.add_child(_button("BACK", func() -> void: show_page("title"), 26, Vector2(240, 60)))
 	return root
 
@@ -166,14 +174,59 @@ func _build_pause() -> Control:
 	var box := _column(root, 18)
 	box.add_child(_header("PAUSED"))
 	box.add_child(_button("RESUME", func() -> void: game.resume_game(), 34, Vector2(380, 76), ACCENT))
+	box.add_child(_button("TACTICS", func() -> void: open_tactics("pause"), 28, Vector2(380, 66)))
 	box.add_child(_button("SETTINGS", func() -> void: open_settings("pause"), 28, Vector2(380, 66)))
 	box.add_child(_button("QUIT TO MENU", func() -> void: game.quit_to_menu(), 28, Vector2(380, 66)))
 	return root
 
 
+## Mode card picked: choose tactics before kick-off.
+func _choose_mode(mode: SoccerMatch.Mode) -> void:
+	_pending_mode = mode
+	game.prepare_opponent()
+	open_tactics("modes")
+
+
+func open_tactics(from_page: String) -> void:
+	_tactics_return = from_page
+	_kickoff_button.visible = from_page == "modes"
+	show_page("tactics")
+
+
 func _start(mode: SoccerMatch.Mode) -> void:
 	show_page("")
 	game.start_match(mode)
+
+
+func _build_tactics() -> Control:
+	var root := _page()
+	_dim(root)
+	var box := _column(root, 16)
+	box.add_child(_header("TACTICS"))
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 28)
+	box.add_child(row)
+	_preview = FormationPreview.new()
+	_preview.custom_minimum_size = Vector2(380, 250)
+	row.add_child(_preview)
+	var options := VBoxContainer.new()
+	options.alignment = BoxContainer.ALIGNMENT_CENTER
+	options.add_theme_constant_override("separation", 12)
+	row.add_child(options)
+	for d: Dictionary in GameSettings.TACTICS_DEFS:
+		options.add_child(_setting_row(d["key"], d["label"]))
+	_opponent_label = _label("", 22, Color(1.0, 0.75, 0.7))
+	options.add_child(_opponent_label)
+
+	var bottom := HBoxContainer.new()
+	bottom.alignment = BoxContainer.ALIGNMENT_CENTER
+	bottom.add_theme_constant_override("separation", 24)
+	box.add_child(bottom)
+	bottom.add_child(_button("BACK", func() -> void: go_back(), 24, Vector2(200, 60)))
+	_kickoff_button = _button("KICK OFF", func() -> void: _start(_pending_mode), 32, Vector2(300, 66), ACCENT)
+	bottom.add_child(_kickoff_button)
+	return root
 
 
 # --- Settings rows ----------------------------------------------------------
@@ -201,11 +254,19 @@ func _change(key: String, step: int) -> void:
 func _on_setting_changed() -> void:
 	_refresh_settings()
 	game.apply_settings()
+	if game.state != SoccerMatch.State.MENU:
+		game.apply_tactics()
 
 
 func _refresh_settings() -> void:
 	for key: String in _setting_labels:
 		_setting_labels[key].text = GameSettings.option_text(key)
+	if _preview != null:
+		_preview.formation = GameSettings.formation()
+		_preview.mentality = GameSettings.mentality()
+		_preview.queue_redraw()
+		_opponent_label.text = "VS %s:  %s  /  %s" % [Config.TEAM_NAMES[1], game.team_formation[1],
+			Formations.MENTALITIES[game.team_mentality[1]]]
 
 
 # --- Widgets ----------------------------------------------------------------

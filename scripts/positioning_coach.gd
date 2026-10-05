@@ -24,6 +24,9 @@ const EVENTS := {
 	"tight_mark": ["TIGHT MARK", 5],
 	"intercept": ["INTERCEPT!", 25],
 	"received": ["GOOD RUN", 10],
+	"slide_won": ["CLEAN SLIDE!", 15],
+	"tackle_won": ["TACKLE WON", 10],
+	"foul": ["FOUL", -10],
 }
 
 var game: SoccerMatch
@@ -164,6 +167,14 @@ func on_interception() -> void:
 	_event("intercept", game.human, true)
 
 
+func on_tackle_won(sliding: bool) -> void:
+	_event("slide_won" if sliding else "tackle_won", game.human, true)
+
+
+func on_foul() -> void:
+	_event("foul", game.human, true)
+
+
 ## Called by the match when the human receives a pass from a teammate.
 func on_received_pass() -> void:
 	_event("received", game.human)
@@ -177,8 +188,10 @@ func _event(id: String, me: Footballer, force := false) -> void:
 	var pts: int = EVENTS[id][1]
 	points += pts
 	counts[id] += 1
-	game.vision.energy = minf(1.0, game.vision.energy + pts * VISION_PER_POINT)
-	game.hud.popup("%s +%d" % [label, pts], Config.to_3d(me.pos, 0.0) + Vector3(0, 2.5, 0))
+	game.vision.energy = clampf(game.vision.energy + pts * VISION_PER_POINT, 0.0, 1.0)
+	var text := "%s %+d" % [label, pts]
+	var color := Color(0.55, 1.0, 0.6) if pts > 0 else Color(1.0, 0.4, 0.35)
+	game.hud.popup(text, Config.to_3d(me.pos, 0.0) + Vector3(0, 2.5, 0), color)
 
 
 func _nearest_teammate(me: Footballer) -> Footballer:

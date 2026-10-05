@@ -3,26 +3,12 @@ extends Node3D
 ## Builds the match scene in code and runs everything: kickoff/goal flow,
 ## the human-controlled player, team AI, passing, shooting and possession.
 
-enum State { MENU, KICKOFF, PLAYING, GOAL, FULLTIME }
+enum State { MENU, KICKOFF, PLAYING, GOAL, FULLTIME, SET_PIECE }
 ## TEAM: control switches to whoever is nearest the ball.
 ## SOLO: you are always #9 and play off the ball, Ao Ashi style; teammates
 ## carry the ball and you call for it.
 enum Mode { TEAM, SOLO }
 
-## 4-3-3 in the team's own frame (attacking +x), axes normalised to the half-pitch.
-const FORMATION := [
-	{"role": Footballer.GK, "pos": Vector2(-0.95, 0.0), "num": 1},
-	{"role": Footballer.DEF, "pos": Vector2(-0.64, 0.66), "num": 2},
-	{"role": Footballer.DEF, "pos": Vector2(-0.70, 0.22), "num": 5},
-	{"role": Footballer.DEF, "pos": Vector2(-0.70, -0.22), "num": 4},
-	{"role": Footballer.DEF, "pos": Vector2(-0.64, -0.66), "num": 3},
-	{"role": Footballer.MID, "pos": Vector2(-0.40, 0.36), "num": 8},
-	{"role": Footballer.MID, "pos": Vector2(-0.46, 0.0), "num": 6},
-	{"role": Footballer.MID, "pos": Vector2(-0.40, -0.36), "num": 10},
-	{"role": Footballer.FWD, "pos": Vector2(-0.14, 0.62), "num": 7},
-	{"role": Footballer.FWD, "pos": Vector2(-0.06, 0.0), "num": 9},
-	{"role": Footballer.FWD, "pos": Vector2(-0.14, -0.62), "num": 11},
-]
 ## The striker: kick-off taker and the SOLO-mode player.
 const STRIKER := 9
 const PLAYMAKER := 6
@@ -34,11 +20,21 @@ const KEY_BINDINGS := {
 	"pass": [KEY_SPACE, KEY_J],
 	"shoot": [KEY_K, KEY_ENTER],
 	"vision": [KEY_L, KEY_SHIFT],
+	"special": [KEY_U, KEY_I],
 }
+
+## Pass kinds: AUTO lofts it when the lane is blocked (AI default).
+enum PassKind { AUTO, GROUND, LOB }
+enum ShotKind { AUTO, FINESSE, POWER, CHIP }
+const SHOT_NAMES := {ShotKind.FINESSE: "FINESSE!", ShotKind.POWER: "POWER SHOT!", ShotKind.CHIP: "CHIP!"}
+## Hold times for the touch buttons (seconds).
+const TAP_TIME := 0.18
+const LOB_HOLD := 0.3
+const FULL_CHARGE := 0.9
+const FREE_KICK_DISTANCE := 9.15 * Config.M
 
 const PASS_MIN := 60.0
 const PASS_MAX := 55.0 * Config.M
-const SHOT_SPEED := 44.0 * Config.M
 ## Time after receiving the ball before an opponent may tackle.
 const RECEIVE_GRACE := 0.35
 
@@ -58,7 +54,9 @@ var mode := Mode.TEAM
 var coach: PositioningCoach
 ## When true the human's player is also AI-driven (attract mode / balance testing).
 var autopilot := false
-var stats := {"shots": [0, 0], "saves": [0, 0]}
+var stats := {"shots": [0, 0], "saves": [0, 0], "fouls": [0, 0]}
+var team_formation := ["4-3-3", "4-3-3"]
+var team_mentality := [1, 1]
 
 var _state_timer := 0.0
 var _last_holder: Footballer = null
@@ -74,6 +72,7 @@ var _cam_pos := Vector3(0, 14, 22)
 var _cam_look := Vector3.ZERO
 var _call_timer := 0.0
 var _possession_time := 0.0
+var _press_start := {"pass": -1.0, "shoot": -1.0}
 
 
 func _ready() -> void:
@@ -81,12 +80,12 @@ func _ready() -> void:
 	stadium = Stadium.new()
 	add_child(stadium)
 	for t in 2:
-		for slot: Dictionary in FORMATION:
+		for slot: Array in Formations.DATA[team_formation[t]]:
 			var p := Footballer.new()
 			p.team = t
-			p.role = slot["role"]
-			p.number = slot["num"]
-			p.formation = slot["pos"]
+			p.role = slot[0]
+			p.formation = slot[1]
+			p.number = slot[2]
 			add_child(p)
 			teams[t].append(p)
 
@@ -185,9 +184,34 @@ func start_match(new_mode: Mode) -> void:
 	time_left = GameSettings.match_seconds()
 	apply_settings()
 	vision.energy = 1.0
-	stats = {"shots": [0, 0], "saves": [0, 0]}
+	stats = {"shots": [0, 0], "saves": [0, 0], "fouls": [0, 0]}
 	coach.reset()
+	apply_tactics()
+	apply_formation(1, team_formation[1])
+	for t in 2:
+		for p: Footballer in teams[t]:
+			p.fouls = 0
 	_start_kickoff(0)
+
+
+## Picks the opponent's shape for the next match (shown on the tactics screen).
+func prepare_opponent() -> void:
+	team_formation[1] = Formations.NAMES.pick_random()
+	team_mentality[1] = randi_range(0, 2)
+
+
+## Applies the player's saved formation and mentality (also mid-match).
+func apply_tactics() -> void:
+	apply_formation(0, GameSettings.formation())
+	team_mentality[0] = GameSettings.mentality()
+
+
+func apply_formation(team: int, formation_name: String) -> void:
+	team_formation[team] = formation_name
+	for p: Footballer in teams[team]:
+		var slot := Formations.slot_for(formation_name, p.number)
+		p.role = slot[0]
+		p.formation = slot[1]
 
 
 func _reset_positions() -> void:
@@ -204,6 +228,7 @@ func _reset_positions() -> void:
 			p.desired_velocity = Vector2.ZERO
 			p.facing = Vector2(Config.attack_dir(t), 0)
 			p.stun = 0.0
+			p.end_action()
 
 
 func _start_kickoff(team_with_ball: int) -> void:
@@ -298,7 +323,7 @@ func _physics_process(delta: float) -> void:
 					p.desired_velocity = Vector2.ZERO
 					p.step(delta)
 			return
-		State.KICKOFF:
+		State.KICKOFF, State.SET_PIECE:
 			_state_timer -= delta
 			if _state_timer <= 0.0:
 				state = State.PLAYING
@@ -355,25 +380,84 @@ func _update_human_movement() -> void:
 		human.desired_velocity = Vector2.ZERO
 
 
+## With the ball: PASS (tap = ground, hold = lofted), SHOOT (tap = finesse,
+## hold = power, joystick pulled back = chip), SPECIAL = through ball.
+## Without it: PASS = switch / call, SHOOT = standing tackle, SPECIAL = slide.
 func _handle_actions() -> void:
 	if Input.is_action_just_pressed("vision"):
 		vision.toggle()
 	var v := _input_vector()
-	if ball.holder == human:
-		if Input.is_action_just_pressed("pass"):
-			var aim := v if v.length() > 0.2 else human.facing
-			var target := best_pass_target(human, aim)
-			if target != null:
-				pass_to(human, target)
-				vision.deactivate()
-		elif Input.is_action_just_pressed("shoot"):
-			vision.deactivate()
-			shoot(human, v.y)
-	elif Input.is_action_just_pressed("pass"):
-		if mode == Mode.SOLO:
+	var aim := v if v.length() > 0.2 else human.facing
+	var has_ball := ball.holder == human
+
+	if Input.is_action_just_pressed("pass"):
+		if has_ball:
+			_press_start["pass"] = _clock
+		elif mode == Mode.SOLO:
 			_call_for_ball()
 		else:
 			_switch_to_nearest()
+	if Input.is_action_just_released("pass") and _press_start["pass"] >= 0.0:
+		var held: float = _clock - _press_start["pass"]
+		_press_start["pass"] = -1.0
+		var target := best_pass_target(human, aim) if has_ball else null
+		if target != null:
+			pass_to(human, target, PassKind.LOB if held >= LOB_HOLD else PassKind.GROUND)
+			vision.deactivate()
+
+	if Input.is_action_just_pressed("shoot"):
+		if has_ball:
+			_press_start["shoot"] = _clock
+		elif not _ball_with_teammate():
+			try_tackle(human)
+	if Input.is_action_just_released("shoot") and _press_start["shoot"] >= 0.0:
+		var held: float = _clock - _press_start["shoot"]
+		_press_start["shoot"] = -1.0
+		if has_ball:
+			vision.deactivate()
+			var kind := ShotKind.FINESSE if held < TAP_TIME else ShotKind.POWER
+			if v.dot(Vector2(Config.attack_dir(human.team), 0)) < -0.5:
+				kind = ShotKind.CHIP
+			shoot(human, v.y, kind, clampf(held / FULL_CHARGE, 0.0, 1.0))
+
+	if Input.is_action_just_pressed("special"):
+		if has_ball:
+			var forward := (aim + Vector2(Config.attack_dir(human.team), 0)).normalized()
+			var target := best_pass_target(human, forward)
+			if target != null:
+				through_pass(human, target)
+				vision.deactivate()
+		elif not _ball_with_teammate():
+			try_slide(human, aim)
+
+	if not has_ball:
+		_press_start["pass"] = -1.0
+		_press_start["shoot"] = -1.0
+
+
+## 0..1 while a PASS/SHOOT button is held with the ball (for the charge ring).
+func charge_ratio(action: String) -> float:
+	if _press_start.get(action, -1.0) < 0.0:
+		return 0.0
+	var full := LOB_HOLD if action == "pass" else FULL_CHARGE
+	return clampf((_clock - _press_start[action]) / full, 0.0, 1.0)
+
+
+func _ball_with_teammate() -> bool:
+	return ball.holder != null and ball.holder.team == human.team
+
+
+func try_tackle(p: Footballer) -> void:
+	var to_ball := ball.pos - p.pos
+	var dir := to_ball if to_ball.length() < 4.0 * Config.M else p.facing
+	p.start_tackle(dir)
+
+
+func try_slide(p: Footballer, dir: Vector2) -> void:
+	if p.start_slide(dir):
+		FX.grass(self, Config.to_3d(p.pos), 8)
+		if p == human:
+			vibrate(25)
 
 
 ## SOLO mode: ask the teammate on the ball to pass to you.
@@ -535,6 +619,9 @@ func _jockey_target(p: Footballer) -> Vector2:
 	var carrier := ball.holder
 	if p.lunge <= 0.0 and p.tackle_cooldown <= 0.0 and p.pos.distance_to(carrier.pos) < 3.5 * Config.M:
 		if randf() < get_physics_process_delta_time() * 1.1:
+			if randf() < 0.3 and p.pos.distance_to(carrier.pos) > 1.5 * Config.M:
+				try_slide(p, ball.target_point() - p.pos)
+				return ball.pos
 			p.lunge = 0.5
 	if p.lunge > 0.0:
 		return ball.pos
@@ -561,6 +648,7 @@ func _support_position(p: Footballer, attacking: bool) -> Vector2:
 		x += 0.3 if p.role == Footballer.FWD else 0.22
 	else:
 		x -= 0.08
+	x += Formations.MENTALITY_SHIFT[team_mentality[p.team]]
 	match p.role:
 		Footballer.DEF:
 			x = clampf(x, -0.85, 0.3)
@@ -649,8 +737,13 @@ func _ai_carry(p: Footballer) -> void:
 				return
 		var best := best_pass_target(p, Vector2(dir, 0))
 		var gain := (best.pos.x - p.pos.x) * dir if best != null else -INF
+		var runner := _find_runner(p)
+		if runner != null and randf() < 0.3:
+			through_pass(p, runner)
+			return
 		if best != null and gain > 8.0 * Config.M and randf() < 0.35:
-			pass_to(p, best)
+			var long := p.pos.distance_to(best.pos) > 28.0 * Config.M
+			pass_to(p, best, PassKind.LOB if long and randf() < 0.6 else PassKind.AUTO)
 			return
 		if pressure < 1.8 * Config.M and best != null and randf() < 0.6:
 			pass_to(p, best)
@@ -723,7 +816,7 @@ func best_pass_target(from: Footballer, aim: Vector2) -> Footballer:
 	return best
 
 
-func pass_to(from: Footballer, to: Footballer) -> void:
+func pass_to(from: Footballer, to: Footballer, kind := PassKind.AUTO) -> void:
 	var lead := to.pos + to.velocity * 0.4
 	var offset := lead - from.pos
 	var d := offset.length()
@@ -731,7 +824,8 @@ func pass_to(from: Footballer, to: Footballer) -> void:
 		return
 	var lift := 0.0
 	var spd := clampf(d * Ball.GROUND_DAMP + 20.0 * Config.M, 22.0 * Config.M, 60.0 * Config.M)
-	if lane_clearance(from.pos, lead, 1 - from.team) < 30.0 and d > 9.0 * Config.M:
+	var blocked := lane_clearance(from.pos, lead, 1 - from.team) < 30.0 and d > 9.0 * Config.M
+	if kind == PassKind.LOB or (kind == PassKind.AUTO and blocked):
 		# Lane is blocked: chip it over. Airtime T = 2 * lift / g.
 		lift = clampf(d * 0.3, 7.0 * Config.M, 11.0 * Config.M)
 		var airtime := 2.0 * lift / Ball.GRAVITY
@@ -746,23 +840,111 @@ func pass_to(from: Footballer, to: Footballer) -> void:
 		_set_human(to)
 
 
-func shoot(p: Footballer, aim: float) -> void:
+## Pass into the space ahead of a teammate so they run onto it.
+func through_pass(from: Footballer, to: Footballer) -> void:
+	var dir := Config.attack_dir(from.team)
+	var run := Vector2(dir, 0)
+	if to.velocity.length() > Config.M:
+		run = (run * 0.6 + to.velocity.normalized() * 0.4).normalized()
+	var point := to.pos + run * 7.0 * Config.M
+	point.x = clampf(point.x, -Config.HALF_L + 2.0 * Config.M, Config.HALF_L - 2.0 * Config.M)
+	point.y = clampf(point.y, -Config.HALF_W + 2.0 * Config.M, Config.HALF_W - 2.0 * Config.M)
+	var offset := point - from.pos
+	var d := offset.length()
+	if d < 1.0:
+		return
+	# Rolling distance with exponential drag: d = v0 / k * (1 - e^(-k t)); arrive with the runner.
+	var k := Ball.GROUND_DAMP
+	var t := maxf(to.pos.distance_to(point) / Config.PLAYER_SPEED, 0.6)
+	var spd := clampf(d * k / (1.0 - exp(-k * t)), 16.0 * Config.M, 55.0 * Config.M)
+	from.facing = offset / d
+	from.play_kick()
+	ball.kick(offset / d * spd, 0.0, from, to)
+	if from == human:
+		vibrate(20)
+		hud.popup("THROUGH BALL", Config.to_3d(from.pos) + Vector3(0, 2.5, 0), Color(0.6, 0.9, 1.0))
+	FX.kick(self, Config.to_3d(from.pos + from.facing * 16.0, 5.0), Color(0.75, 0.95, 1.0), 0.7)
+	if from.team == 0 and mode == Mode.TEAM:
+		_set_human(to)
+
+
+## A forward teammate making a run with space in behind, for a through ball.
+func _find_runner(from: Footballer) -> Footballer:
+	var dir := Config.attack_dir(from.team)
+	var deepest := -INF
+	for o: Footballer in teams[1 - from.team]:
+		if o.role != Footballer.GK:
+			deepest = maxf(deepest, o.pos.x * dir)
+	for mate: Footballer in teams[from.team]:
+		if mate == from or mate.role == Footballer.GK or mate.role == Footballer.DEF:
+			continue
+		var ahead := (mate.pos.x - from.pos.x) * dir
+		var near_line := mate.pos.x * dir > deepest - 4.0 * Config.M
+		if ahead > 6.0 * Config.M and near_line and mate.velocity.x * dir > 0.0 \
+				and from.pos.distance_to(mate.pos) < 40.0 * Config.M:
+			return mate
+	return null
+
+
+## FINESSE: placed and curled into the corner. POWER: faster the longer the
+## button is held, but less accurate and may fly over. CHIP: lofted over an
+## advancing keeper. AUTO lets the AI pick.
+func shoot(p: Footballer, aim: float, kind := ShotKind.AUTO, power := 0.6) -> void:
 	var dir := Config.attack_dir(p.team)
-	var target := Vector2(dir * (Config.HALF_L + 30.0), clampf(aim, -1.0, 1.0) * (Config.GOAL_WIDTH * 0.5 - 18.0))
-	var err := p.pos.distance_to(target) / 1000.0 * 70.0
+	var goal_x := dir * Config.HALF_L
+	var target := Vector2(goal_x + dir * 30.0, clampf(aim, -1.0, 1.0) * (Config.GOAL_WIDTH * 0.5 - 0.5 * Config.M))
+	var dist := p.pos.distance_to(target)
+	if kind == ShotKind.AUTO:
+		var keeper := player_by_number(1 - p.team, 1)
+		var keeper_out := absf(keeper.pos.x - goal_x) > 4.0 * Config.M
+		if keeper_out and dist < 28.0 * Config.M and randf() < 0.5:
+			kind = ShotKind.CHIP
+		else:
+			kind = ShotKind.FINESSE if randf() < 0.5 else ShotKind.POWER
+			power = randf_range(0.4, 1.0)
+
+	var err_mult := 0.55
+	if kind == ShotKind.POWER:
+		err_mult = 0.6 + 0.8 * power
+	elif kind == ShotKind.CHIP:
+		err_mult = 0.7
 	if p.team == 1:
-		err *= GameSettings.ai_shot_error()
-	target.y += randf_range(-err, err)
-	var v := (target - p.pos).normalized() * SHOT_SPEED
+		err_mult *= GameSettings.ai_shot_error()
+	target.y += randf_range(-1.0, 1.0) * dist * 0.07 * err_mult
+	var to := target - p.pos
+	var d := to.length()
+
+	var speed := 27.0 * Config.M
+	var lift := randf_range(0.5, 2.5) * Config.M
+	var curl := 0.0
+	match kind:
+		ShotKind.FINESSE:
+			# Constant curl w over flight time T: start w*T/2 off-line so the arc ends on target,
+			# bending outwards first and back in towards the corner.
+			var w := 0.9
+			var time := d / speed
+			var out := Vector2(0, signf(target.y) if target.y != 0.0 else 1.0)
+			if to.rotated(-w * time * 0.5).dot(out) < to.dot(out):
+				w = -w
+			curl = w
+			to = to.rotated(-w * time * 0.5)
+		ShotKind.POWER:
+			speed = lerpf(30.0, 48.0, power) * Config.M
+			lift = randf_range(0.5, 2.0 + 7.5 * power) * Config.M
+		ShotKind.CHIP:
+			speed = 15.0 * Config.M
+			var time := d / speed
+			lift = minf((1.6 * Config.M + 0.5 * Ball.GRAVITY * time * time) / time, 14.0 * Config.M)
+	var v := to.normalized() * speed
 	p.facing = v.normalized()
 	p.play_kick()
 	if p == human:
-		vibrate(45)
-	ball.kick(v, randf_range(40.0, 200.0) * minf(p.pos.distance_to(target) / 600.0, 1.0), p)
-	FX.kick(self, Config.to_3d(p.pos + p.facing * 16.0, 5.0), Config.TEAM_COLORS[p.team].lightened(0.5), 1.5)
-	_shake = 6.0
+		vibrate(30 + int(30 * power))
+	ball.kick(v, lift, p, null, curl)
+	FX.kick(self, Config.to_3d(p.pos + p.facing * 16.0, 5.0), Config.TEAM_COLORS[p.team].lightened(0.5), 1.0 + power)
+	_shake = 4.0 + 6.0 * power
 	stats["shots"][p.team] += 1
-	hud.show_banner("SHOOT!", Config.TEAM_COLORS[p.team], 0.55, 0.55)
+	hud.show_banner(SHOT_NAMES[kind], Config.TEAM_COLORS[p.team], 0.6, 0.55)
 	if not autopilot or p.team == 0:
 		_start_cinematic(p, v.normalized())
 
@@ -785,12 +967,18 @@ func _separate_players() -> void:
 func _handle_ball_contacts() -> void:
 	if ball.frozen:
 		return
+	for t in 2:
+		for p: Footballer in teams[t]:
+			if p.action != Footballer.ACT_NONE and not p.action_resolved:
+				_resolve_action(p)
+				if state != State.PLAYING:
+					return
 	if ball.holder == null:
 		var best: Footballer = null
 		var best_d := INF
 		for t in 2:
 			for p: Footballer in teams[t]:
-				if p.stun > 0.0 or not ball.can_be_taken_by(p):
+				if p.busy() or not ball.can_be_taken_by(p):
 					continue
 				var reach := Config.PLAYER_RADIUS + Config.BALL_RADIUS + (16.0 if p.role == Footballer.GK else 4.0)
 				var d := p.pos.distance_to(ball.pos)
@@ -811,8 +999,10 @@ func _handle_ball_contacts() -> void:
 
 	var h := ball.holder
 	for p: Footballer in teams[1 - h.team]:
-		if p.tackle_cooldown > 0.0 or p.stun > 0.0 or _possession_time < RECEIVE_GRACE:
+		if p.tackle_cooldown > 0.0 or p.busy() or _possession_time < RECEIVE_GRACE:
 			continue
+		if p.is_human and not autopilot:
+			continue  # The human tackles with the buttons.
 		if p.pos.distance_to(ball.pos) < Config.PLAYER_RADIUS + Config.BALL_RADIUS + 6.0:
 			p.tackle_cooldown = 0.9
 			var chance := 0.1 if h.role == Footballer.GK else (GameSettings.ai_tackle() if p.team == 1 else 0.4)
@@ -843,6 +1033,110 @@ func _check_possession_change() -> void:
 			coach.on_received_pass()
 	if h.team == 0 and mode == Mode.TEAM:
 		_set_human(h)
+
+
+## Outcome of a slide or standing tackle: win the ball, miss, or foul.
+func _resolve_action(p: Footballer) -> void:
+	var sliding := p.action == Footballer.ACT_SLIDE
+	var reach := (1.15 if sliding else 0.95) * Config.M
+	var h := ball.holder
+	if h != null and h.team != p.team:
+		var d_ball := p.pos.distance_to(ball.pos)
+		var d_man := p.pos.distance_to(h.pos)
+		var from_behind := p.action_dir.dot(h.facing) > 0.55
+		if d_ball < reach:
+			p.action_resolved = true
+			var foul_chance := 0.45 if from_behind else (0.08 if sliding else 0.04)
+			if randf() < foul_chance:
+				_foul(p, h)
+				return
+			var win := 0.9
+			if not sliding:
+				var side := (p.pos - h.pos).normalized().dot(h.facing)
+				win = 0.7 if side > 0.3 else (0.5 if side > -0.3 else 0.3)
+			if randf() < win:
+				h.stun = 0.5
+				if sliding:
+					# The slide pokes the ball away; it is loose until someone collects it.
+					ball.kick(p.action_dir * 7.0 * Config.M + Vector2(randf_range(-1, 1), randf_range(-1, 1)) * Config.M, 0.0, p)
+				else:
+					ball.holder = p
+					p.end_action()
+				FX.grass(self, Config.to_3d(ball.pos), 14)
+				if h == human:
+					vibrate(60)
+				if p == human:
+					coach.on_tackle_won(sliding)
+			elif not sliding:
+				p.end_action()
+		elif sliding and d_man < 0.8 * Config.M:
+			p.action_resolved = true
+			_foul(p, h)
+	elif h == null and sliding and ball.height < 0.6 * Config.M and p.pos.distance_to(ball.pos) < reach:
+		p.action_resolved = true
+		ball.kick(p.action_dir * 8.0 * Config.M, 0.0, p)
+		FX.grass(self, Config.to_3d(ball.pos), 10)
+
+
+func _foul(fouler: Footballer, victim: Footballer) -> void:
+	fouler.fouls += 1
+	stats["fouls"][fouler.team] += 1
+	victim.stun = 0.9
+	if fouler == human:
+		coach.on_foul()
+	if victim == human or fouler == human:
+		vibrate(80)
+	if fouler.fouls == 2:
+		hud.popup("YELLOW CARD #%d" % fouler.number, Config.to_3d(fouler.pos) + Vector3(0, 2.5, 0), Color(1, 0.9, 0.2))
+	var penalty := _in_box(victim.pos, fouler.team)
+	_start_set_piece(victim.team, victim.pos, penalty)
+
+
+## True if the point is inside the penalty area defended by `team`.
+func _in_box(point: Vector2, team: int) -> bool:
+	var goal_x := -Config.attack_dir(team) * Config.HALF_L
+	return absf(point.x - goal_x) < Config.BOX_DEPTH and absf(point.y) < Config.BOX_WIDTH * 0.5
+
+
+## Free kick (opponents pushed back 9.15 m) or penalty (everyone out of the box).
+func _start_set_piece(team: int, at: Vector2, penalty: bool) -> void:
+	state = State.SET_PIECE
+	_state_timer = 1.8
+	vision.deactivate()
+	end_cinematic()
+	var dir := Config.attack_dir(team)
+	var goal_x := dir * Config.HALF_L
+	if penalty:
+		at = Vector2(goal_x - dir * Config.PENALTY_SPOT, 0)
+	at.x = clampf(at.x, -Config.HALF_L + Config.M, Config.HALF_L - Config.M)
+	at.y = clampf(at.y, -Config.HALF_W + Config.M, Config.HALF_W - Config.M)
+	for t in 2:
+		for q: Footballer in teams[t]:
+			q.end_action()
+			q.velocity = Vector2.ZERO
+			q.desired_velocity = Vector2.ZERO
+	var taker := player_by_number(team, STRIKER) if penalty else nearest_to(team, at, true)
+	for t in 2:
+		for q: Footballer in teams[t]:
+			if q == taker:
+				continue
+			if penalty:
+				if q.role == Footballer.GK and q.team != team:
+					q.pos = Vector2(goal_x - dir * 0.3 * Config.M, 0)
+				elif _in_box(q.pos, 1 - team) or q.pos.distance_to(at) < FREE_KICK_DISTANCE:
+					q.pos.x = goal_x - dir * (Config.BOX_DEPTH + randf_range(1.0, 4.0) * Config.M)
+			elif q.team != team and q.pos.distance_to(at) < FREE_KICK_DISTANCE:
+				q.pos = at + (q.pos - at).normalized() * FREE_KICK_DISTANCE
+	ball.place(at)
+	taker.pos = at - Vector2(dir, 0) * (Config.PLAYER_RADIUS + Config.BALL_RADIUS)
+	taker.facing = Vector2(dir, 0)
+	ball.holder = taker
+	_last_holder = taker
+	_possession_time = 0.0
+	taker.decision_timer = 0.6
+	if team == human.team and mode == Mode.TEAM:
+		_set_human(taker)
+	hud.show_banner("PENALTY!" if penalty else "FOUL!", Color(1, 0.85, 0.2), 1.4, 0.8)
 
 
 func player_by_number(team: int, number: int) -> Footballer:

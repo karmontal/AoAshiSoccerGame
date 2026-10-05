@@ -47,6 +47,9 @@ var _elbow_r: Node3D
 var _phase := 0.0
 var _kick := 0.0
 var _celebrate := -1.0
+## 1 = full slide-tackle pose, blended smoothly.
+var slide_target := 0.0
+var _slide := 0.0
 
 
 func build(shirt: Color, shorts: Color, socks: Color, number: int, variant: int, accent := Color.WHITE, keeper := false) -> void:
@@ -227,6 +230,19 @@ func animate(delta: float, speed_ratio: float, stunned: bool) -> void:
 
 	if stunned:
 		lean = 0.3 + sin(_phase * 2.0) * 0.1
+
+	# Slide tackle: drop and lean back, leading leg out straight, the other tucked.
+	_slide = move_toward(_slide, slide_target, delta * 9.0)
+	if _slide > 0.0:
+		var a := _slide
+		leg_r = lerpf(leg_r, 1.45, a)
+		knee_r = lerpf(knee_r, 0.0, a)
+		leg_l = lerpf(leg_l, 0.55, a)
+		knee_l = lerpf(knee_l, -1.8, a)
+		arm_l = arm_l.lerp(Vector2(-0.7, -1.1), a)
+		arm_r = arm_r.lerp(Vector2(-0.7, 1.1), a)
+		bob = lerpf(bob, -0.62, a)
+		lean = lerpf(lean, 1.1, a)
 
 	_leg_l.rotation.x = leg_l
 	_leg_r.rotation.x = leg_r

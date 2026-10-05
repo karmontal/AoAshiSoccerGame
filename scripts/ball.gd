@@ -13,6 +13,7 @@ const AIR_DAMP := 0.35
 const CROSSBAR := Config.GOAL_HEIGHT
 ## Players can bring the ball down up to chest height.
 const CONTROL_HEIGHT := 1.7 * Config.M
+const KEEPER_REACH := 2.5 * Config.M
 ## Slightly larger than a real ball (0.11 m) so it reads on a phone screen.
 const VISUAL_RADIUS := 0.14
 const BALL_SHADER := preload("res://shaders/ball.gdshader")
@@ -25,6 +26,8 @@ var holder: Footballer = null
 var intended_receiver: Footballer = null
 var last_kicker: Footballer = null
 var frozen := false
+## Sideways curl in radians per second (finesse shots, curled passes).
+var spin := 0.0
 var _ignore_kicker := 0.0
 var _mesh: MeshInstance3D
 var _shadow: MeshInstance3D
@@ -39,9 +42,13 @@ func _physics_process(delta: float) -> void:
 	if holder != null:
 		pos = holder.pos + holder.facing * (Config.PLAYER_RADIUS + Config.BALL_RADIUS + 2.0)
 		velocity = holder.velocity
+		spin = 0.0
 		height = 0.0
 		vz = 0.0
 	else:
+		if spin != 0.0:
+			velocity = velocity.rotated(spin * delta)
+			spin *= exp(-0.4 * delta)
 		if height > 0.0 or vz > 0.0:
 			vz -= GRAVITY * delta
 			height += vz * delta
@@ -49,6 +56,7 @@ func _physics_process(delta: float) -> void:
 				height = 0.0
 				vz = -vz * 0.35 if absf(vz) > 4.0 * Config.M else 0.0
 				velocity *= 0.8
+				spin *= 0.3
 			velocity *= exp(-AIR_DAMP * delta)
 		else:
 			velocity *= exp(-GROUND_DAMP * delta)
@@ -142,9 +150,10 @@ func _check_bounds() -> void:
 		velocity.y = -velocity.y * 0.5
 
 
-func kick(vel: Vector2, lift: float, kicker: Footballer, receiver: Footballer = null) -> void:
+func kick(vel: Vector2, lift: float, kicker: Footballer, receiver: Footballer = null, curl := 0.0) -> void:
 	holder = null
 	velocity = vel
+	spin = curl
 	vz = lift
 	if lift > 0.0:
 		height = maxf(height, 1.0)
@@ -175,7 +184,9 @@ func target_point() -> Vector2:
 
 
 func can_be_taken_by(p: Footballer) -> bool:
-	return not frozen and height < CONTROL_HEIGHT and not (p == last_kicker and _ignore_kicker > 0.0)
+	# Keepers can jump and stretch for high balls.
+	var reach := KEEPER_REACH if p.role == Footballer.GK else CONTROL_HEIGHT
+	return not frozen and height < reach and not (p == last_kicker and _ignore_kicker > 0.0)
 
 
 func place(at: Vector2) -> void:
@@ -183,6 +194,7 @@ func place(at: Vector2) -> void:
 	intended_receiver = null
 	last_kicker = null
 	pos = at
+	spin = 0.0
 	velocity = Vector2.ZERO
 	height = 0.0
 	vz = 0.0

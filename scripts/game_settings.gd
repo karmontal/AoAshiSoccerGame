@@ -19,6 +19,12 @@ const DEFS := [
 	{"key": "show_fps", "label": "SHOW FPS", "options": ["OFF", "ON"], "default": 0},
 ]
 
+## Remembered between matches but edited on the tactics screen, not in Settings.
+const TACTICS_DEFS := [
+	{"key": "formation", "label": "FORMATION", "options": Formations.NAMES, "default": 0},
+	{"key": "mentality", "label": "MENTALITY", "options": Formations.MENTALITIES, "default": 1},
+]
+
 static var _values := {}
 static var _loaded := false
 
@@ -45,7 +51,7 @@ static func cycle(key: String, step: int) -> void:
 
 
 static func reset_to_defaults() -> void:
-	for d: Dictionary in DEFS:
+	for d: Dictionary in DEFS + TACTICS_DEFS:
 		_values[d["key"]] = d["default"]
 	_loaded = true
 	save()
@@ -64,13 +70,13 @@ static func _ensure_loaded() -> void:
 	_loaded = true
 	var cfg := ConfigFile.new()
 	var ok := cfg.load(PATH) == OK
-	for d: Dictionary in DEFS:
+	for d: Dictionary in DEFS + TACTICS_DEFS:
 		var v: int = cfg.get_value(SECTION, d["key"], d["default"]) if ok else d["default"]
 		_values[d["key"]] = clampi(v, 0, d["options"].size() - 1)
 
 
 static func _def(key: String) -> Dictionary:
-	for d: Dictionary in DEFS:
+	for d: Dictionary in DEFS + TACTICS_DEFS:
 		if d["key"] == key:
 			return d
 	push_error("Unknown setting: " + key)
@@ -114,3 +120,11 @@ static func button_scale() -> float:
 ## 0 = low, 1 = medium, 2 = high.
 static func graphics() -> int:
 	return get_value("graphics")
+
+
+static func formation() -> String:
+	return Formations.NAMES[get_value("formation")]
+
+
+static func mentality() -> int:
+	return get_value("mentality")

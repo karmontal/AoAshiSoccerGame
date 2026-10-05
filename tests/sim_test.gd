@@ -10,6 +10,9 @@ var vision_uses := 0
 var calls := 0
 var last_holder: Footballer = null
 var pressed: Array[String] = []
+## action -> frame to release a held button.
+var held := {}
+var set_pieces := 0
 var modes_left: Array = [SoccerMatch.Mode.TEAM, SoccerMatch.Mode.SOLO]
 var menus_checked := false
 
@@ -34,8 +37,17 @@ func _check_menus_and_settings() -> void:
 	menus.go_back()
 	assert(menus.page == "title")
 	menus.show_page("modes")
+	menus._choose_mode(SoccerMatch.Mode.TEAM)
+	assert(menus.page == "tactics")
+	for i in Formations.NAMES.size():
+		menus._change("formation", 1)
+		assert(game.team_formation[0] == GameSettings.formation() or game.state == SoccerMatch.State.MENU)
+	menus._change("mentality", 1)
+	menus.go_back()
+	assert(menus.page == "modes")
 	menus.go_back()
 	assert(menus.page == "title")
+	GameSettings.reset_to_defaults()
 	print("MENUS OK")
 
 
@@ -44,6 +56,10 @@ func _process(_delta: float) -> bool:
 	for a in pressed:
 		Input.action_release(a)
 	pressed.clear()
+	for a: String in held.keys():
+		if frames >= held[a]:
+			Input.action_release(a)
+			held.erase(a)
 
 	if not menus_checked:
 		menus_checked = true
@@ -69,7 +85,27 @@ func _process(_delta: float) -> bool:
 			if game.mode == SoccerMatch.Mode.SOLO and game.ball.holder != game.human:
 				calls += 1
 		if frames % 131 == 0:
-			_press("shoot")
+			_hold("shoot", 1 + (frames / 131) % 50)
+		if frames % 97 == 0:
+			_hold("pass", 25)
+		if frames % 61 == 0:
+			_press("special")
+		if frames == 1500:
+			# Force a foul in midfield, then a penalty.
+			game._foul(game.teams[1][6], game.teams[0][9])
+			assert(game.state == SoccerMatch.State.SET_PIECE)
+			set_pieces += 1
+		if frames == 2600:
+			var victim: Footballer = game.teams[0][9]
+			victim.pos = Vector2(Config.HALF_L - 5.0 * Config.M, 0)
+			game._foul(game.teams[1][2], victim)
+			assert(game.state == SoccerMatch.State.SET_PIECE)
+			assert(absf(game.ball.pos.x - (Config.HALF_L - Config.PENALTY_SPOT)) < 1.0, "penalty on the spot")
+			set_pieces += 1
+		if frames == 2000:
+			GameSettings.cycle("formation", 1)
+			game.apply_tactics()
+			assert(game.team_formation[0] == GameSettings.formation())
 		if frames % 400 == 0 and game.vision.can_activate():
 			_press("vision")
 			vision_uses += 1
@@ -92,15 +128,25 @@ func _process(_delta: float) -> bool:
 	assert(not is_nan(game.ball.pos.x))
 
 	if game.state == SoccerMatch.State.FULLTIME:
-		print("%s FULLTIME after %d frames | score %d-%d | possession changes %d | vision uses %d | calls %d | eye %s %d pts %s"
+		print("%s FULLTIME after %d frames | score %d-%d | possession changes %d | vision uses %d | calls %d | set pieces %d | fouls %s | eye %s %d pts %s"
 			% [SoccerMatch.Mode.keys()[game.mode], frames, game.score[0], game.score[1], possession_changes,
-				vision_uses, calls, game.coach.grade(), game.coach.points, game.coach.counts])
+				vision_uses, calls, set_pieces, game.stats["fouls"], game.coach.grade(), game.coach.points, game.coach.counts])
+		assert(set_pieces == 2)
+		set_pieces = 0
+		GameSettings.reset_to_defaults()
 		game.handle_screen_tap(Vector2.ZERO)
 		assert(game.state == SoccerMatch.State.MENU and game.menus.page == "modes")
 	elif frames > 60 * 60 * 10:
 		push_error("match never finished")
 		return true
 	return false
+
+
+func _hold(a: String, frames_held: int) -> void:
+	if held.has(a):
+		return
+	Input.action_press(a)
+	held[a] = frames + frames_held
 
 
 func _press(a: String) -> void:

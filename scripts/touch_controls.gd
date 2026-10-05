@@ -3,14 +3,16 @@ extends Node2D
 ## Multi-touch controls: a floating joystick on one half of the screen and
 ## action buttons on the other (swapped in left-handed mode), plus a pause
 ## button. Buttons drive the same input actions the keyboard uses, so
-## gameplay code only reads `vector` and the action map.
+## gameplay code only reads `vector` and the action map. Labels follow the
+## situation: SHOOT/TACKLE, PASS/SWITCH/CALL, THROUGH/SLIDE.
 
 const BASE_JOY_RADIUS := 90.0
 const DEADZONE := 0.15
 const BUTTON_DEFS := [
-	{"action": "shoot", "label": "SHOOT", "color": Color(0.95, 0.35, 0.3), "radius": 66.0, "offset": Vector2(130, 140)},
-	{"action": "pass", "label": "PASS", "color": Color(0.3, 0.75, 0.4), "radius": 54.0, "offset": Vector2(290, 90)},
-	{"action": "vision", "label": "VISION", "color": Color(0.3, 0.75, 1.0), "radius": 48.0, "offset": Vector2(150, 310)},
+	{"action": "shoot", "label": "SHOOT", "color": Color(0.95, 0.35, 0.3), "radius": 62.0, "offset": Vector2(130, 140)},
+	{"action": "pass", "label": "PASS", "color": Color(0.3, 0.75, 0.4), "radius": 52.0, "offset": Vector2(285, 85)},
+	{"action": "special", "label": "THROUGH", "color": Color(0.95, 0.65, 0.2), "radius": 46.0, "offset": Vector2(280, 230)},
+	{"action": "vision", "label": "VISION", "color": Color(0.3, 0.75, 1.0), "radius": 44.0, "offset": Vector2(125, 300)},
 ]
 const PAUSE_RADIUS := 26.0
 
@@ -151,24 +153,45 @@ func _draw() -> void:
 		draw_rect(Rect2(_pause_pos + Vector2(dx - 3, -10), Vector2(6, 20)), Color.WHITE)
 
 	var has_ball := game.ball.holder == game.human
+	var team_ball := game.ball.holder != null and game.ball.holder.team == game.human.team
 	for b in _buttons:
 		var pos: Vector2 = b["pos"]
 		var radius: float = b["size"]
 		var col: Color = b["color"]
 		var label: String = b["label"]
-		if b["action"] == "pass" and not has_ball:
-			label = "CALL" if game.mode == SoccerMatch.Mode.SOLO else "SWITCH"
 		var dim := 1.0
-		if b["action"] == "shoot" and not has_ball:
-			dim = 0.45
-		if b["action"] == "vision" and not game.vision.active and not game.vision.can_activate():
-			dim = 0.45
+		var charge := 0.0
+		match b["action"]:
+			"shoot":
+				if has_ball:
+					charge = game.charge_ratio("shoot")
+				else:
+					label = "TACKLE"
+					dim = 0.45 if team_ball else 1.0
+			"pass":
+				if has_ball:
+					charge = game.charge_ratio("pass")
+					if charge >= 1.0:
+						label = "LOB"
+				else:
+					label = "CALL" if game.mode == SoccerMatch.Mode.SOLO else "SWITCH"
+			"special":
+				if not has_ball:
+					label = "SLIDE"
+					dim = 0.45 if team_ball else 1.0
+			"vision":
+				if not game.vision.active and not game.vision.can_activate():
+					dim = 0.45
 		var pressed: bool = b["index"] != -1
 		draw_circle(pos, radius + 4, Color(Config.INK, 0.6 * dim))
 		draw_circle(pos, radius, Color(col.lightened(0.25) if pressed else col, 0.75 * dim))
 		if b["action"] == "vision":
 			var e := game.vision.energy
 			draw_arc(pos, radius + 9, -PI / 2, -PI / 2 + TAU * e, 48, Color(0.6, 0.95, 1.0), 6)
-		var fs := int(20 * _scale)
+		elif charge > 0.0:
+			var ring := Color(1, 0.9, 0.3).lerp(Color(1, 0.3, 0.2), charge) if b["action"] == "shoot" else Color(1, 1, 1)
+			draw_arc(pos, radius + 9, -PI / 2, -PI / 2 + TAU * charge, 48, Config.INK, 10)
+			draw_arc(pos, radius + 9, -PI / 2, -PI / 2 + TAU * charge, 48, ring, 6)
+		var fs := int((18 if label.length() > 6 else 20) * _scale)
 		draw_string_outline(font, pos + Vector2(-radius, 8), label, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, fs, 5, Config.INK)
 		draw_string(font, pos + Vector2(-radius, 8), label, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, fs, Color(1, 1, 1, dim))
