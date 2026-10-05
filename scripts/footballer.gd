@@ -59,6 +59,9 @@ var kick_count := 0
 ## Co-op controller slot (0 = local / host) and the latest networked position.
 var slot := 0
 var net_pos := Vector2.ZERO
+## Co-op coach order: AI players run here while order_time > 0.
+var order_point := Vector2.ZERO
+var order_time := 0.0
 var _get_up := 0.0
 
 var model: PlayerModel
@@ -164,6 +167,7 @@ func step(delta: float) -> void:
 	tackle_cooldown = maxf(tackle_cooldown - delta, 0.0)
 	decision_timer -= delta
 	lunge -= delta
+	order_time -= delta
 	_get_up = maxf(_get_up - delta, 0.0)
 	if action != ACT_NONE:
 		action_time -= delta

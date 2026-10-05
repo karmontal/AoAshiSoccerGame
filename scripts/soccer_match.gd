@@ -54,6 +54,11 @@ var remote := {}
 var net_active := false
 ## Clients only mirror the host's simulation.
 var is_client := false
+## This device is the co-op coach: tactical view and orders, no player.
+var coach_view := false
+var coach_selected: Footballer = null
+## Coach orders on screen: shirt number -> {"point", "time"}.
+var orders := {}
 var stadium: Stadium
 var camera: Camera3D
 var human: Footballer
@@ -392,7 +397,7 @@ func _process(delta: float) -> void:
 	if state == State.FULLTIME:
 		if Input.is_action_just_pressed("pass") or Input.is_action_just_pressed("shoot"):
 			_leave_fulltime()
-	elif state == State.PLAYING and not autopilot:
+	elif state == State.PLAYING and not autopilot and not coach_view:
 		local_input.sample_local(_input_vector())
 		if is_client:
 			net.send_input(local_input)
@@ -405,9 +410,13 @@ func _process(delta: float) -> void:
 			var r: Dictionary = remote[peer]
 			_handle_actions_for(r["player"], r["input"], false)
 			r["input"].clear_edges()
-	if is_client:
+	if is_client and not coach_view:
 		coach.update(real)
 	human.hide_marker = cinematic_active() or state == State.GOAL or state == State.MENU
+	for n: int in orders.keys():
+		orders[n]["time"] -= real
+		if orders[n]["time"] <= 0.0:
+			orders.erase(n)
 	_update_camera(real)
 
 
@@ -728,6 +737,8 @@ func _update_ai(delta: float) -> void:
 				elif ball.holder != null:
 					target = _jockey_target(p)
 				p.desired_velocity = _steer(p, target, 1.0)
+			elif p.order_time > 0.0:
+				p.desired_velocity = _steer(p, p.order_point, 1.0)
 			else:
 				var spot := _support_position(p, owner_team == t)
 				if owner_team == t:
@@ -1264,6 +1275,42 @@ func _start_set_piece(team: int, at: Vector2, penalty: bool) -> void:
 # --- Network co-op ----------------------------------------------------------
 
 const SNAP_HEADER := 12
+const ORDER_TIME := 5.0
+const MENTALITY_CALLS := ["COACH: DROP BACK!", "COACH: BALANCE!", "COACH: PRESS HIGH!"]
+
+
+## Host: the coach sent a player to a spot. AI players obey; friends see the arrow.
+func give_order(number: int, point: Vector2) -> void:
+	var p := player_by_number(0, number)
+	point.x = clampf(point.x, -Config.HALF_L + Config.M, Config.HALF_L - Config.M)
+	point.y = clampf(point.y, -Config.HALF_W + Config.M, Config.HALF_W - Config.M)
+	p.order_point = point
+	p.order_time = ORDER_TIME
+	fx("order", [number, point])
+
+
+func set_coach_mentality(level: int) -> void:
+	team_mentality[0] = clampi(level, 0, 2)
+	banner(MENTALITY_CALLS[team_mentality[0]], Color(0.45, 1.0, 0.55), 1.2, 0.6)
+
+
+## Coach device: tap a teammate to select, then tap the pitch to send them there.
+func coach_tap(screen_pos: Vector2) -> void:
+	var best_d := 60.0
+	var picked: Footballer = null
+	for p: Footballer in teams[0]:
+		var d := camera.unproject_position(Config.to_3d(p.pos)).distance_to(screen_pos)
+		if d < best_d:
+			best_d = d
+			picked = p
+	if picked != null:
+		coach_selected = picked
+		return
+	if coach_selected != null:
+		var point := screen_to_pitch(screen_pos)
+		if point != Vector2.INF:
+			net.coach_order.rpc_id(1, coach_selected.number, point)
+		coach_selected = null
 const SNAP_PER_PLAYER := 9
 
 
@@ -1291,6 +1338,8 @@ func apply_event(kind: String, args: Array) -> void:
 			FX.confetti(self, args[0], args[1])
 		"shake":
 			_shake = args[0]
+		"order":
+			orders[args[0]] = {"point": args[1], "time": ORDER_TIME}
 
 
 ## Host: hand one attacker to a connected friend (slot 1-3).
@@ -1318,8 +1367,14 @@ func start_client(slot: int) -> void:
 	apply_settings()
 	vision.energy = 1.0
 	coach.reset()
-	_set_human(player_by_number(0, NetCoop.SLOTS[slot]))
-	human.set_slot(slot)
+	coach_view = slot == NetCoop.COACH_SLOT
+	if coach_view:
+		_set_human(player_by_number(0, STRIKER))
+		vision.coach_view = true
+		vision.active = true
+	else:
+		_set_human(player_by_number(0, NetCoop.SLOTS[slot]))
+		human.set_slot(slot)
 	set_slot_tags(true)
 	state = State.KICKOFF
 	menus.show_page("")
@@ -1342,6 +1397,11 @@ func end_network() -> void:
 		remove_remote(peer)
 	is_client = false
 	net_active = false
+	coach_view = false
+	coach_selected = null
+	orders.clear()
+	vision.coach_view = false
+	vision.deactivate()
 	ball.remote = false
 	set_slot_tags(false)
 	for t in 2:

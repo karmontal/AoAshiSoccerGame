@@ -22,6 +22,8 @@ const GRID := Color(0.5, 0.85, 1.0, 0.22)
 var game: SoccerMatch
 var energy := 1.0
 var active := false
+## Co-op coach: the view is always on, never drains and never slows time.
+var coach_view := false
 var _t := 0.0
 
 
@@ -48,7 +50,7 @@ func activate() -> void:
 
 
 func deactivate() -> void:
-	if not active:
+	if not active or coach_view:
 		return
 	active = false
 	Engine.time_scale = 1.0
@@ -57,7 +59,7 @@ func deactivate() -> void:
 func _process(delta: float) -> void:
 	var real := delta / maxf(Engine.time_scale, 0.01)
 	_t += real
-	if active:
+	if active and not coach_view:
 		energy -= DRAIN_PER_SEC * real
 		if energy <= 0.0:
 			energy = 0.0

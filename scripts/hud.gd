@@ -53,13 +53,14 @@ func _draw() -> void:
 		_draw_focus_lines(vs)
 	var fulltime := game.state == SoccerMatch.State.FULLTIME
 	if not fulltime:
+		_draw_orders(font)
 		_draw_popups(font)
 	_draw_scoreboard(vs, font)
-	if not fulltime:
+	if not fulltime and not game.coach_view:
 		_draw_eye_meter(font)
 	if GameSettings.enabled("show_fps"):
 		draw_string(font, Vector2(12, 26), "%d FPS" % Engine.get_frames_per_second(), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1, 0.6))
-	if game.vision.active:
+	if game.vision.active and not game.coach_view:
 		_text(font, Vector2(0, vs.y - 28), "VISION  -  tap a teammate to pass", 22, Color(0.6, 0.9, 1.0), vs.x)
 	if _banner_time < _banner_duration:
 		_draw_banner(vs, font)
@@ -176,6 +177,32 @@ func _draw_popups(font: Font) -> void:
 		draw_string_outline(font, pos + Vector2(-w / 2 + 3, 3), text, HORIZONTAL_ALIGNMENT_CENTER, w, size, 9, Color(Config.INK, alpha))
 		draw_string_outline(font, pos + Vector2(-w / 2, 0), text, HORIZONTAL_ALIGNMENT_CENTER, w, size, 6, Color(Config.INK, alpha))
 		draw_string(font, pos + Vector2(-w / 2, 0), text, HORIZONTAL_ALIGNMENT_CENTER, w, size, Color(col, alpha))
+
+
+## Co-op coach orders: an arrow from the player to the spot, on every screen.
+func _draw_orders(font: Font) -> void:
+	var cam := game.camera
+	var col := Color(0.45, 1.0, 0.55)
+	for n: int in game.orders:
+		var order: Dictionary = game.orders[n]
+		var p := game.player_by_number(0, n)
+		var a3 := Config.to_3d(p.pos)
+		var b3 := Config.to_3d(order["point"])
+		if cam.is_position_behind(a3) or cam.is_position_behind(b3):
+			continue
+		var a := cam.unproject_position(a3)
+		var b := cam.unproject_position(b3)
+		var alpha := clampf(order["time"], 0.0, 1.0)
+		var c := Color(col, alpha)
+		draw_dashed_line(a, b, Color(Config.INK, alpha), 7.0, 12.0)
+		draw_dashed_line(a, b, c, 4.0, 12.0)
+		var dir := (b - a).normalized()
+		var side := dir.orthogonal() * 10.0
+		draw_colored_polygon(PackedVector2Array([b, b - dir * 18.0 + side, b - dir * 18.0 - side]), c)
+		draw_arc(b, 14, 0, TAU, 24, c, 3)
+		var label := "#%d RUN!" % n
+		draw_string_outline(font, b + Vector2(-60, -20), label, HORIZONTAL_ALIGNMENT_CENTER, 120, 20, 5, Color(Config.INK, alpha))
+		draw_string(font, b + Vector2(-60, -20), label, HORIZONTAL_ALIGNMENT_CENTER, 120, 20, c)
 
 
 ## Live positioning grade (top-left).

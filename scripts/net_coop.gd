@@ -13,6 +13,8 @@ const DISCOVERY_PORT := 7778
 const MAX_CLIENTS := 3
 ## Shirt numbers controlled by player 1 (host) .. player 4.
 const SLOTS := [9, 10, 7, 11]
+## Lobby slot of the coach (no player; tactical view and orders).
+const COACH_SLOT := 4
 const ANNOUNCE_EVERY := 1.0
 const GAME_TIMEOUT := 3.5
 
@@ -110,7 +112,7 @@ func start_match() -> void:
 	game.set_slot_tags(true)
 	game.human.set_slot(0)
 	for peer: int in players:
-		if peer != 1:
+		if peer != 1 and players[peer] != COACH_SLOT:
 			game.add_remote(peer, players[peer])
 	start_client_match.rpc()
 
@@ -174,6 +176,16 @@ func _on_peer_connected(id: int) -> void:
 	if game.net_active and game.state != SoccerMatch.State.MENU:
 		game.add_remote(id, players[id])
 		start_client_match.rpc_id(id)
+
+
+## Client: ask to be the coach (or go back to playing).
+func set_coach(on: bool) -> void:
+	if role == "client":
+		request_role.rpc_id(1, on)
+
+
+func is_coach() -> bool:
+	return my_slot == COACH_SLOT
 
 
 func _on_peer_disconnected(id: int) -> void:
@@ -244,6 +256,35 @@ func net_input(stick: Vector2, presses: PackedInt32Array, releases: PackedInt32A
 func request_pass(number: int) -> void:
 	if role == "host":
 		game.remote_pass(multiplayer.get_remote_sender_id(), number)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_role(coach: bool) -> void:
+	if role != "host" or game.net_active and game.state != SoccerMatch.State.MENU:
+		return
+	var peer := multiplayer.get_remote_sender_id()
+	var used: Array = players.values()
+	if coach and COACH_SLOT not in used:
+		players[peer] = COACH_SLOT
+	elif not coach and players.get(peer, -1) == COACH_SLOT:
+		for s in range(1, SLOTS.size()):
+			if s not in used:
+				players[peer] = s
+				break
+	sync_lobby.rpc(players)
+	lobby_changed.emit()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func coach_order(number: int, point: Vector2) -> void:
+	if role == "host" and players.get(multiplayer.get_remote_sender_id(), -1) == COACH_SLOT:
+		game.give_order(number, point)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func coach_mentality(level: int) -> void:
+	if role == "host" and players.get(multiplayer.get_remote_sender_id(), -1) == COACH_SLOT:
+		game.set_coach_mentality(level)
 
 
 @rpc("authority", "call_remote", "unreliable_ordered")

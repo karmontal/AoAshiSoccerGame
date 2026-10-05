@@ -112,6 +112,18 @@ jobs:
           grep -q "HOST OK" host.log
           ! grep -q "SCRIPT ERROR" client.log host.log
 
+      - name: Co-op coach test (host + player + coach processes)
+        run: |
+          timeout 120 ~/godot/godot --headless --path . -s tests/net_host_test.gd ++ coach > host.log 2>&1 &
+          sleep 1
+          timeout 120 ~/godot/godot --headless --path . -s tests/net_coach_test.gd > coach.log 2>&1 &
+          timeout 120 ~/godot/godot --headless --path . -s tests/net_client_test.gd 2>&1 | tee client.log
+          wait
+          cat host.log coach.log
+          grep -q "HOST OK" host.log
+          grep -q "COACH OK" coach.log
+          grep -q "CLIENT OK" client.log
+
       - name: Export APK
         run: |
           mkdir -p build

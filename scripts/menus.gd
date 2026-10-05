@@ -32,6 +32,7 @@ var _lobby_info: Label
 var _lobby_players: Label
 var _lobby_start: Button
 var _lobby_tactics: Button
+var _lobby_coach: Button
 var _setting_labels := {}
 var _logo: Control
 var _time := 0.0
@@ -326,6 +327,8 @@ func _build_lobby() -> Control:
 	row.add_child(_button("LEAVE", func() -> void: go_back(), 24, Vector2(200, 60)))
 	_lobby_tactics = _button("TACTICS", func() -> void: open_tactics("lobby"), 24, Vector2(200, 60))
 	row.add_child(_lobby_tactics)
+	_lobby_coach = _button("BE THE COACH", func() -> void: game.net.set_coach(not game.net.is_coach()), 24, Vector2(260, 60), COOP_GREEN)
+	row.add_child(_lobby_coach)
 	_lobby_start = _button("START MATCH", func() -> void:
 		show_page("")
 		game.net.start_match(), 30, Vector2(300, 66), COOP_GREEN)
@@ -348,11 +351,16 @@ func _refresh_lobby() -> void:
 	for peer: int in net.players:
 		var s: int = net.players[peer]
 		var me := " (you)" if peer == multiplayer.get_unique_id() else ""
-		lines.append("P%d  -  #%d%s" % [s + 1, NetCoop.SLOTS[s], me])
+		if s == NetCoop.COACH_SLOT:
+			lines.append("COACH  -  tactics & orders%s" % me)
+		else:
+			lines.append("P%d  -  #%d%s" % [s + 1, NetCoop.SLOTS[s], me])
 	lines.sort()
 	_lobby_players.text = "\n".join(lines) if not lines.is_empty() else "..."
 	_lobby_start.visible = hosting
 	_lobby_tactics.visible = hosting
+	_lobby_coach.visible = net.role == "client"
+	_lobby_coach.text = "BE A PLAYER" if net.is_coach() else "BE THE COACH"
 
 
 # --- Daily Vision -----------------------------------------------------------
