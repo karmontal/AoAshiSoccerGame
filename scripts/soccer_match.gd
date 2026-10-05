@@ -47,6 +47,7 @@ var controls: TouchControls
 var menus: Menus
 var challenge: ChallengeMode
 var net: NetCoop
+var audio: GameAudio
 ## Local player's input; remote co-op players: peer id -> {"player", "input"}.
 var local_input := PlayerInput.new()
 var remote := {}
@@ -89,6 +90,8 @@ var _call_timer := 0.0
 var _possession_time := 0.0
 var _caller: Footballer = null
 var _snapshot_timer := 0.0
+## A shot is in flight: a goal-line bounce now is a near miss.
+var _shot_live := false
 
 
 func _ready() -> void:
@@ -107,7 +110,11 @@ func _ready() -> void:
 
 	ball = Ball.new()
 	ball.goal_scored.connect(_on_goal)
+	ball.hit_goal_line.connect(_on_goal_line)
 	add_child(ball)
+	audio = GameAudio.new()
+	audio.game = self
+	add_child(audio)
 
 	camera = Camera3D.new()
 	camera.fov = 42.0
@@ -254,6 +261,7 @@ func start_match(new_mode: Mode) -> void:
 	vision.energy = 1.0
 	stats = {"shots": [0, 0], "saves": [0, 0], "fouls": [0, 0]}
 	coach.reset()
+	audio.stop_voice()
 	apply_tactics()
 	apply_formation(1, team_formation[1])
 	for t in 2:
@@ -311,6 +319,10 @@ func _start_kickoff(team_with_ball: int) -> void:
 	taker.decision_timer = 0.6
 	_set_human(player_by_number(0, STRIKER if mode != Mode.TEAM or team_with_ball == 0 else PLAYMAKER))
 	banner("KICK OFF", Color(1, 0.9, 0.3), 1.2, 0.8)
+	_shot_live = false
+	sfx("whistle_long", -2.0)
+	if score[0] + score[1] == 0:
+		say("kickoff")
 
 
 func _on_goal(scoring_team: int) -> void:
@@ -331,6 +343,11 @@ func _on_goal(scoring_team: int) -> void:
 	fx("confetti", [Config.to_3d(_celebrant.pos), Config.TEAM_COLORS[scoring_team]])
 	fx("shake", [18.0])
 	banner("GOAL!!", Config.TEAM_COLORS[scoring_team], 2.6, 1.2)
+	_shot_live = false
+	sfx("net")
+	sfx("cheer", 0.0 if scoring_team == 0 else -7.0)
+	crowd(1.0)
+	say("goal")
 
 
 func _end_match() -> void:
@@ -338,6 +355,10 @@ func _end_match() -> void:
 	time_left = 0.0
 	ball.frozen = true
 	vision.deactivate()
+	sfx("whistle_final", -2.0)
+	sfx("cheer", -6.0)
+	crowd(0.7)
+	say("fulltime")
 
 
 ## Called by TouchControls for touches that didn't land on a button.
@@ -368,6 +389,7 @@ func handle_screen_tap(screen_pos: Vector2) -> bool:
 		net.request_pass.rpc_id(1, target.number)
 	else:
 		pass_to(human, target)
+	audio.say("vision", 0.6)
 	vision.deactivate()
 	return true
 
@@ -567,12 +589,14 @@ func _ball_with_teammate(p: Footballer) -> bool:
 func try_tackle(p: Footballer) -> void:
 	var to_ball := ball.pos - p.pos
 	var dir := to_ball if to_ball.length() < 4.0 * Config.M else p.facing
-	p.start_tackle(dir)
+	if p.start_tackle(dir):
+		sfx("tackle", -8.0, 0.1)
 
 
 func try_slide(p: Footballer, dir: Vector2) -> void:
 	if p.start_slide(dir):
 		fx("grass", [Config.to_3d(p.pos), 8])
+		sfx("slide", -7.0, 0.1)
 		if p == human:
 			vibrate(25)
 
@@ -996,6 +1020,7 @@ func through_pass(from: Footballer, to: Footballer) -> void:
 	if from == human:
 		vibrate(20)
 		hud.popup("THROUGH BALL", Config.to_3d(from.pos) + Vector3(0, 2.5, 0), Color(0.6, 0.9, 1.0))
+	say("through", 0.5 if from.team == 0 else 0.2)
 	fx("kick", [Config.to_3d(from.pos + from.facing * 16.0, 5.0), Color(0.75, 0.95, 1.0), 0.7])
 	if from.team == 0 and mode == Mode.TEAM:
 		_set_human(to)
@@ -1078,6 +1103,9 @@ func shoot(p: Footballer, aim: float, kind := ShotKind.AUTO, power := 0.6) -> vo
 	fx("shake", [4.0 + 6.0 * power])
 	stats["shots"][p.team] += 1
 	banner(SHOT_NAMES[kind], Config.TEAM_COLORS[p.team], 0.6, 0.55)
+	_shot_live = true
+	crowd(0.55)
+	say("shot", 0.3)
 	if not autopilot or p.team == 0:
 		_start_cinematic(p, v.normalized())
 
@@ -1126,6 +1154,12 @@ func _handle_ball_contacts() -> void:
 		else:
 			if best.role == Footballer.GK and ball.last_kicker != null and ball.last_kicker.team != best.team and ball.velocity.length() > 900.0:
 				stats["saves"][best.team] += 1
+				sfx("kick", -3.0, 0.1)
+				if _shot_live:
+					sfx("ooh", -4.0)
+					crowd(0.8)
+					say("save")
+			_shot_live = false
 			ball.holder = best
 			ball.intended_receiver = null
 		return
@@ -1145,6 +1179,7 @@ func _handle_ball_contacts() -> void:
 				if h == human:
 					vibrate(60)
 				fx("grass", [Config.to_3d(ball.pos), 10])
+				sfx("tackle", -4.0, 0.1)
 				break
 
 
@@ -1196,6 +1231,8 @@ func _resolve_action(p: Footballer) -> void:
 					ball.holder = p
 					p.end_action()
 				fx("grass", [Config.to_3d(ball.pos), 14])
+				sfx("tackle", 0.0, 0.1)
+				say("slide" if sliding else "tackle", 0.6 if p.team == 0 else 0.25)
 				if h == human:
 					vibrate(60)
 				if p == human:
@@ -1222,6 +1259,13 @@ func _foul(fouler: Footballer, victim: Footballer) -> void:
 	if fouler.fouls == 2:
 		hud.popup("YELLOW CARD #%d" % fouler.number, Config.to_3d(fouler.pos) + Vector3(0, 2.5, 0), Color(1, 0.9, 0.2))
 	var penalty := _in_box(victim.pos, fouler.team)
+	sfx("tackle", 0.0, 0.1)
+	sfx("whistle_foul", -2.0)
+	if penalty:
+		crowd(0.9)
+		say("penalty")
+	else:
+		say("foul" if randf() < 0.5 else "freekick")
 	_start_set_piece(victim.team, victim.pos, penalty)
 
 
@@ -1319,6 +1363,30 @@ func banner(text: String, color: Color, duration: float, text_scale: float) -> v
 	fx("banner", [text, color, duration, text_scale])
 
 
+## Sound effect for everyone in the match.
+func sfx(name: String, volume_db := 0.0, pitch_jitter := 0.0) -> void:
+	fx("sfx", [name, volume_db, pitch_jitter])
+
+
+## Commentator line; the dice are rolled here so every device hears the same.
+func say(group: String, chance := 1.0) -> void:
+	if randf() < chance:
+		fx("say", [group])
+
+
+func crowd(amount: float) -> void:
+	fx("crowd", [amount])
+
+
+## Ball hit the goal line outside the goal mouth.
+func _on_goal_line() -> void:
+	if _shot_live and state == State.PLAYING:
+		_shot_live = false
+		sfx("ooh", -3.0)
+		crowd(0.7)
+		say("miss")
+
+
 ## Visual effect / camera event, mirrored to clients when hosting.
 func fx(kind: String, args: Array) -> void:
 	apply_event(kind, args)
@@ -1332,6 +1400,17 @@ func apply_event(kind: String, args: Array) -> void:
 			hud.show_banner(args[0], args[1], args[2], args[3])
 		"kick":
 			FX.kick(self, args[0], args[1], args[2])
+			# args[2]: 0.6 pass .. 2.0 full-power shot.
+			if args[2] >= 1.0:
+				audio.play("kick_power", -6.0 + 4.0 * (args[2] - 1.0), 0.06)
+			else:
+				audio.play("kick", -4.0, 0.1)
+		"sfx":
+			audio.play(args[0], args[1], args[2])
+		"say":
+			audio.say(args[0])
+		"crowd":
+			audio.cheer(args[0])
 		"grass":
 			FX.grass(self, args[0], args[1])
 		"confetti":
@@ -1367,6 +1446,7 @@ func start_client(slot: int) -> void:
 	apply_settings()
 	vision.energy = 1.0
 	coach.reset()
+	audio.stop_voice()
 	coach_view = slot == NetCoop.COACH_SLOT
 	if coach_view:
 		_set_human(player_by_number(0, STRIKER))

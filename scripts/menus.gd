@@ -3,7 +3,7 @@ extends Control
 ## Front-end screens built from Control nodes: title, mode select, settings
 ## and the in-match pause menu. Runs while the tree is paused.
 
-const VERSION := "v0.6"
+const VERSION := "v0.7"
 const VISION_BLUE := Color(0.35, 0.8, 1.0)
 const COOP_GREEN := Color(0.45, 1.0, 0.55)
 const ACCENT := Color(1.0, 0.75, 0.2)
@@ -571,6 +571,7 @@ func _button(text: String, on_press: Callable, size: int, min_size: Vector2, acc
 		if state == "pressed":
 			style.bg_color = accent.darkened(0.35)
 		b.add_theme_stylebox_override(state, style)
+	b.pressed.connect(game.audio.click)
 	b.pressed.connect(on_press)
 	return b
 

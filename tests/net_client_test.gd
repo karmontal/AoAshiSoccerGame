@@ -60,6 +60,10 @@ func _process(delta: float) -> bool:
 		"wait_end":
 			if game.state == SoccerMatch.State.MENU and game.menus.page == "lobby":
 				print("CLIENT: back in lobby after full time, score ", game.score)
+				print("CLIENT: audio ", game.audio.played)
+				if not game.audio.played.has("whistle_final") or not game.audio.played.has("kick"):
+					push_error("client never heard the host's match sounds")
+					return true
 				phase = "wait_host_leave"
 		"wait_host_leave":
 			if game.net.role == "":

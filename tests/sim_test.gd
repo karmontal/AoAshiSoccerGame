@@ -137,6 +137,13 @@ func _process(_delta: float) -> bool:
 			% [SoccerMatch.Mode.keys()[game.mode], frames, game.score[0], game.score[1], possession_changes,
 				vision_uses, calls, set_pieces, game.stats["fouls"], game.coach.grade(), game.coach.points, game.coach.counts])
 		var forced_ok := set_pieces == 2
+		var heard: Dictionary = game.audio.played
+		print("  audio: %s" % heard)
+		for needed: String in ["kick", "whistle_long", "whistle_foul", "whistle_final", "say:kickoff", "say:fulltime"]:
+			if not heard.has(needed):
+				push_error("sound never played: " + needed)
+				return true
+		heard.clear()
 		set_pieces = 0
 		forced_foul = false
 		forced_penalty = false

@@ -107,6 +107,10 @@ func answer(value: Variant) -> void:
 	results.append(_score)
 	_phase = "reveal"
 	game.vibrate(30)
+	if _score >= 80:
+		game.audio.play("success", -4.0)
+	elif _score < 40:
+		game.audio.play("ooh", -10.0)
 
 
 func _next() -> void:

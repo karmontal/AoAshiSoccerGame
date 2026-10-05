@@ -15,6 +15,9 @@ const DEFS := [
 	{"key": "camera", "label": "CAMERA", "options": ["NEAR", "NORMAL", "FAR"], "default": 1},
 	{"key": "button_size", "label": "BUTTON SIZE", "options": ["SMALL", "NORMAL", "LARGE"], "default": 1},
 	{"key": "left_handed", "label": "LEFT-HANDED", "options": ["OFF", "ON"], "default": 0},
+	{"key": "sound", "label": "SOUND EFFECTS", "options": ["OFF", "ON"], "default": 1},
+	{"key": "music", "label": "MUSIC", "options": ["OFF", "ON"], "default": 1},
+	{"key": "commentary", "label": "COMMENTARY", "options": ["OFF", "ON"], "default": 1},
 	{"key": "vibration", "label": "VIBRATION", "options": ["OFF", "ON"], "default": 1},
 	{"key": "show_fps", "label": "SHOW FPS", "options": ["OFF", "ON"], "default": 0},
 ]

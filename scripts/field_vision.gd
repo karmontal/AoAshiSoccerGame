@@ -47,6 +47,7 @@ func activate() -> void:
 	if not game.net_active:
 		Engine.time_scale = SLOW_SCALE
 	game.hud.show_banner("VISION", Color(0.3, 0.8, 1.0), 0.8, 0.6)
+	game.audio.play("vision_on", -4.0)
 
 
 func deactivate() -> void:
@@ -54,6 +55,7 @@ func deactivate() -> void:
 		return
 	active = false
 	Engine.time_scale = 1.0
+	game.audio.play("vision_off", -8.0)
 
 
 func _process(delta: float) -> void:

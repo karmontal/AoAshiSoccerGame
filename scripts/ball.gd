@@ -5,6 +5,8 @@ extends Node3D
 ## The touchlines and goal lines act as walls, except for the goal mouth.
 
 signal goal_scored(scoring_team: int)
+## Bounced off a goal line outside the goal mouth (a shot gone wide or over).
+signal hit_goal_line
 
 ## Somewhat heavier than real gravity so lofted balls stay snappy.
 const GRAVITY := 16.0 * Config.M
@@ -148,6 +150,7 @@ func _check_bounds() -> void:
 			return
 		pos.x = side * Config.HALF_L
 		velocity.x = -velocity.x * 0.5
+		hit_goal_line.emit()
 	if absf(pos.y) > Config.HALF_W:
 		pos.y = signf(pos.y) * Config.HALF_W
 		velocity.y = -velocity.y * 0.5
